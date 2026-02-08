@@ -15,6 +15,7 @@ type Config struct {
 	Storage    StorageConfig    `yaml:"storage"`
 	Baseline   BaselineConfig   `yaml:"baseline"`
 	AI         AIConfig         `yaml:"ai"`
+	Security   SecurityConfig   `yaml:"security"`
 }
 
 // ServerConfig holds server-related configuration
@@ -71,6 +72,12 @@ type AIConfig struct {
 	Model    string `yaml:"model"`
 }
 
+// SecurityConfig holds security-related configuration
+type SecurityConfig struct {
+	Enabled    bool   `yaml:"enabled"`
+	APIKeyHash string `yaml:"api_key_hash"` // SHA256 hash of the API key
+}
+
 // DefaultConfig returns the default configuration
 func DefaultConfig() *Config {
 	return &Config{
@@ -112,6 +119,10 @@ func DefaultConfig() *Config {
 			Provider: "groq",
 			APIKey:   "",
 			Model:    "llama-3.1-8b-instant",
+		},
+		Security: SecurityConfig{
+			Enabled:    false,
+			APIKeyHash: "",
 		},
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/httprate"
 
 	"github.com/velum/internal/api/handlers"
+	securitymw "github.com/velum/internal/api/middleware"
 	"github.com/velum/internal/config"
 )
 
@@ -58,6 +59,9 @@ func (s *Server) Router() *chi.Mux {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+
+	// Security middleware (validates API key if enabled)
+	r.Use(securitymw.SecurityMiddleware(s.cfg))
 
 	// Health check endpoint
 	r.Get("/health", s.handler.Health)
