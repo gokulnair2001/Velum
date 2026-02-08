@@ -1,0 +1,88 @@
+# Velum Configuration File
+# Copy this file to config.yaml and modify the values as needed
+# cp example.config.yaml config.yaml
+
+# Server configuration
+server:
+  port: "8080"
+  host: "0.0.0.0"               # "0.0.0.0" exposes to outside, "127.0.0.1" locks to localhost
+  environment: "development"    # development, staging, production
+                                # development: enables debug logging and detailed responses
+                                # staging/production: minimal logging, optimized responses
+  
+  # CRITICAL: Prevent connections from hanging forever
+  read_timeout: "10s"           # Max time to read request body (prevent slow clients)
+  write_timeout: "30s"          # Max time to write response (prevent stuck threads)
+  idle_timeout: "60s"           # Keep-alive connection limit
+  
+  # CRITICAL: Don't kill active jobs when redeploying
+  shutdown_timeout: "15s"       # Wait this long for active requests to finish before forcing kill
+
+# CORS configuration
+cors:
+  # Allowed origins for cross-origin requests
+  # Use ["*"] to allow all origins (development only!)
+  # In production, specify exact domains: ["https://dashboard.mycompany.com", "https://app.mycompany.com"]
+  allowed_origins: ["*"]
+  
+  # HTTP methods allowed for CORS requests
+  allowed_methods: ["GET", "POST", "OPTIONS"]
+  
+  # Headers allowed in CORS requests
+  allowed_headers: ["Content-Type", "Authorization"]
+
+# Storage configuration
+storage:
+  retention_days: 90          # How long to keep historical data (days)
+
+# Baseline detection configuration
+baseline:
+  # Number of days to consider for baseline computation
+  window_days: 28
+  
+  # Minimum days of data required before computing baseline
+  min_days: 7
+  
+  # How often to compute baseline: "daily" (cached once per day) or "always" (every request)
+  computation_mode: "daily"
+  
+  # Threshold for classifying trend as increasing/decreasing (0.10 = 10%)
+  trend_threshold: 0.10
+  
+  # Threshold for high significance changes (0.15 = 15%)
+  high_significance_threshold: 0.15
+  
+  # Standard deviation multiplier for significance detection
+  std_deviation_multiplier: 2.0
+
+# AI Layer configuration
+ai:
+  # Enable or disable AI-powered analysis
+  enabled: true
+  
+  # AI provider: "groq" (more providers coming soon)
+  provider: "groq"
+  
+  # API key for the AI provider
+  # Get your Groq API key from: https://console.groq.com/keys
+  # Can also be set via VELUM_AI_API_KEY environment variable
+  api_key: "your-groq-api-key-here"
+  
+  # Model to use for analysis
+  # Available Groq models: llama-3.1-8b-instant, llama-3.1-70b-versatile, mixtral-8x7b-32768
+  model: "llama-3.1-8b-instant"
+
+# Resiliency configuration
+resiliency:
+  # Rate limiting: max requests per second (protects against DDoS and memory exhaustion)
+  rate_limit_requests: 100
+  
+  # Circuit breaker for AI layer (prevents cascading failures)
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 5      # Number of consecutive failures before opening circuit
+    reset_timeout: "30s"      # Time to wait before attempting recovery
+  
+  # Model to use for analysis
+  # Available Groq models: llama-3.1-8b-instant, llama-3.1-70b-versatile, mixtral-8x7b-32768
+  model: "llama-3.1-8b-instant"
