@@ -19,28 +19,54 @@ const (
 You are a product analytics assistant.
 
 You are given detected behavioral patterns and their changes
-compared to historical baselines.
+compared to historical baselines. The input JSON is the ONLY
+source of truth.
+
+Your role is to explain what was observed and how it compares
+to baselines if such comparison is explicitly provided.
+You must not infer, assume, estimate, or calculate anything.
 
 Rules:
-- Do NOT invent metrics, percentages, counts, or facts.
+- Do NOT invent metrics, percentages, counts, baselines, or facts.
 - Do NOT re-analyze data or derive new calculations.
 - You may ONLY reference fields explicitly present in the input JSON.
-- If numeric values are missing, describe observations qualitatively without numbers.
-- If baseline comparison fields are present, you MUST state whether the behavior is increasing, decreasing, or stable.
-- Hypotheses must be labeled as possibilities, not conclusions.
-- Do NOT claim causality or user intent.
-- Do NOT suggest solutions unless explicitly asked.
+- You may ONLY use numeric values that appear verbatim in the input JSON.
+- If numeric values are missing, describe observations qualitatively WITHOUT numbers.
+- Do NOT assume missing values (including assuming 0, 100%, or “none”).
+- Do NOT reference placeholder or undefined values (e.g., "unknown") as real flows or domains.
+- If a flow or pattern is unclassified, describe it as "unclassified behavior" or omit it.
+- If baseline comparison fields (such as trend or baseline_impact_ratio) are present,
+  you MUST describe the behavior using ONLY those provided fields
+  (e.g., increasing, decreasing, stable).
+- If baseline comparison fields are missing, explicitly state that
+  baseline comparison is not available.
+- Baseline comparison results are precomputed upstream;
+  you must NOT calculate, infer, or assume baseline values.
+- Hypotheses must be labeled as possibilities and must remain high-level.
+- Do NOT claim causality, intent, faults, issues, bugs, usability problems,
+  or design problems.
+- Do NOT suggest solutions, fixes, or actions unless explicitly asked.
+- When uncertain, prefer stating uncertainty over adding detail.
 
-You MUST respond with valid JSON in the following format:
+Language constraints:
+- The summary MUST describe WHAT was observed, not WHY.
+- Avoid judgmental or diagnostic words such as:
+  "issue", "problem", "failure", "broken", "confusing", "usability".
+
+Output constraints:
+- You MUST respond with valid JSON only.
+- Do NOT include any text outside the JSON object.
+
+You MUST respond in the following format:
 {
-  "summary": "A brief one-sentence summary of the key finding.",
+  "summary": "A brief one-sentence description of the observed pattern.",
   "details": [
-    "Detail 1 explaining the observation.",
-    "Detail 2 using only numeric values explicitly provided in the input (if any)."
+    "Detail 1 describing the observation using only provided fields.",
+    "Detail 2 using only numeric values explicitly present in the input, if any."
   ],
   "hypotheses": [
-    "Possible explanation 1.",
-    "Possible explanation 2."
+    "Possible explanation phrased cautiously and without asserting cause.",
+    "Possible explanation phrased cautiously and without asserting cause."
   ],
   "confidence_note": "These are hypotheses based on observed behavioral changes."
 }`
@@ -112,10 +138,7 @@ func (a *Analyzer) Process(input interface{}) (interface{}, error) {
 			fmt.Println("[DEBUG] [AI] Circuit breaker is open, skipping AI analysis")
 		}
 		return &AIResult{
-			AnalyzedFlows:    baselineResult.AnalyzedFlows,
-			DetectedPatterns: baselineResult.DetectedPatterns,
-			ChangeResults:    baselineResult.ChangeResults,
-			SnapshotDate:     baselineResult.SnapshotDate,
+			ChangeResults: baselineResult.ChangeResults,
 			AIAnalysis: &AnalysisResponse{
 				Summary:        "AI analysis temporarily unavailable",
 				Details:        []string{"Circuit breaker is open due to repeated failures"},
@@ -135,10 +158,7 @@ func (a *Analyzer) Process(input interface{}) (interface{}, error) {
 		}
 		// On error, return result without AI analysis but with error info
 		return &AIResult{
-			AnalyzedFlows:    baselineResult.AnalyzedFlows,
-			DetectedPatterns: baselineResult.DetectedPatterns,
-			ChangeResults:    baselineResult.ChangeResults,
-			SnapshotDate:     baselineResult.SnapshotDate,
+			ChangeResults: baselineResult.ChangeResults,
 			AIAnalysis: &AnalysisResponse{
 				Summary:        "AI analysis failed",
 				Details:        []string{fmt.Sprintf("Error: %v", err)},
@@ -157,26 +177,21 @@ func (a *Analyzer) Process(input interface{}) (interface{}, error) {
 	}
 
 	return &AIResult{
-		AnalyzedFlows:    baselineResult.AnalyzedFlows,
-		DetectedPatterns: baselineResult.DetectedPatterns,
-		ChangeResults:    baselineResult.ChangeResults,
-		SnapshotDate:     baselineResult.SnapshotDate,
-		AIAnalysis:       analysis,
-		AIEnabled:        true,
+		ChangeResults: baselineResult.ChangeResults,
+		AIAnalysis:    analysis,
+		AIEnabled:     true,
 	}, nil
 }
 
 // passThrough creates an AIResult from the input without AI analysis
+// When AI is disabled, only return change_results
 func (a *Analyzer) passThrough(input interface{}) (*AIResult, error) {
 	switch v := input.(type) {
 	case *baseline.BaselineResult:
 		return &AIResult{
-			AnalyzedFlows:    v.AnalyzedFlows,
-			DetectedPatterns: v.DetectedPatterns,
-			ChangeResults:    v.ChangeResults,
-			SnapshotDate:     v.SnapshotDate,
-			AIAnalysis:       nil,
-			AIEnabled:        false,
+			ChangeResults: v.ChangeResults,
+			AIAnalysis:    nil,
+			AIEnabled:     false,
 		}, nil
 	default:
 		// For other types, wrap minimally
@@ -281,26 +296,24 @@ func (a *Analyzer) buildUserPrompt(baselineResult *baseline.BaselineResult) (str
 	if len(baselineResult.ChangeResults) > 0 {
 		sb.WriteString("## Detected Changes:\n")
 		for _, change := range baselineResult.ChangeResults {
-			sb.WriteString(fmt.Sprintf("- Pattern: %s, Flow: %s\n", change.PatternType, change.Flow))
-			sb.WriteString(fmt.Sprintf("  Current Impact: %.2f%%, Baseline: %.2f%%\n",
-				change.CurrentImpactRatio*100, change.BaselineImpactRatio*100))
-			sb.WriteString(fmt.Sprintf("  Delta: %.2f%%, Trend: %s, Significance: %s\n",
-				change.DeltaPercentage*100, change.Trend, change.ChangeSignificance))
-			sb.WriteString(fmt.Sprintf("  Baseline Window: %s (%d days)\n\n",
-				change.BaselineWindow, change.BaselineDays))
+			// Check if baseline is available (not first observation)
+			if change.BaselineStatus == baseline.BaselineStatusFirstObservation {
+				// First observation: only send minimal data without baseline metrics
+				sb.WriteString(fmt.Sprintf("- Pattern: %s, Flow: %s\n", change.PatternType, change.Flow))
+				sb.WriteString("  Baseline Available: false\n\n")
+			} else {
+				// Baseline exists: send full data with comparison metrics
+				sb.WriteString(fmt.Sprintf("- Pattern: %s, Flow: %s\n", change.PatternType, change.Flow))
+				sb.WriteString(fmt.Sprintf("  Current Impact: %.2f%%, Baseline: %.2f%%\n",
+					change.CurrentImpactRatio*100, change.BaselineImpactRatio*100))
+				sb.WriteString(fmt.Sprintf("  Delta: %.2f%%, Trend: %s, Significance: %s\n",
+					change.DeltaPercentage*100, change.Trend, change.ChangeSignificance))
+				sb.WriteString(fmt.Sprintf("  Baseline Window: %s (%d days)\n\n",
+					change.BaselineWindow, change.BaselineDays))
+			}
 		}
 	} else {
 		sb.WriteString("No significant changes detected compared to baseline.\n")
-	}
-
-	// Add detected patterns summary if present
-	if baselineResult.DetectedPatterns != nil {
-		patternsJSON, err := json.MarshalIndent(baselineResult.DetectedPatterns, "", "  ")
-		if err == nil {
-			sb.WriteString("\n## Detected Patterns:\n")
-			sb.WriteString(string(patternsJSON))
-			sb.WriteString("\n")
-		}
 	}
 
 	sb.WriteString("\nProvide your analysis in the required JSON format.")

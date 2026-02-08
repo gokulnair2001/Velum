@@ -66,11 +66,17 @@ func NewVocabulary() *Vocabulary {
 			"started": "start",
 			"begin":   "start",
 			"began":   "start",
+			"open":    "open",
+			"opened":  "open",
 			"end":     "end",
 			"ended":   "end",
 			"finish":  "end",
 			"stop":    "end",
 			"stopped": "end",
+
+			// Resolution states
+			"resolve":  "resolve",
+			"resolved": "resolve",
 		},
 
 		Surface: map[string]string{
@@ -227,6 +233,17 @@ func NewVocabulary() *Vocabulary {
 			"download": "download",
 			"upload":   "upload",
 			"uploaded": "upload",
+
+			// Document flows
+			"doc":       "document",
+			"document":  "document",
+			"documents": "document",
+			"file":      "document",
+			"files":     "document",
+			"comment":   "commenting",
+			"commenting": "commenting",
+			"annotate":  "commenting",
+			"annotation": "commenting",
 
 			// Navigation flows
 			"navigate":  "navigation",

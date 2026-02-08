@@ -14,7 +14,8 @@ type Config struct {
 	Resiliency ResiliencyConfig `yaml:"resiliency"`
 	Storage    StorageConfig    `yaml:"storage"`
 	Baseline   BaselineConfig   `yaml:"baseline"`
-	AI         AIConfig         `yaml:"ai"`
+	AIAnalyzer AIAnalyzerConfig `yaml:"ai_analyzer"`
+	VocabAgent VocabAgentConfig `yaml:"vocab_agent"`
 	Security   SecurityConfig   `yaml:"security"`
 }
 
@@ -64,8 +65,16 @@ type BaselineConfig struct {
 	StdDeviationMultiplier  float64 `yaml:"std_deviation_multiplier"`
 }
 
-// AIConfig holds AI layer configuration
-type AIConfig struct {
+// AIAnalyzerConfig holds AI analyzer layer configuration (for baseline analysis summaries)
+type AIAnalyzerConfig struct {
+	Enabled  bool   `yaml:"enabled"`
+	Provider string `yaml:"provider"`
+	APIKey   string `yaml:"api_key"`
+	Model    string `yaml:"model"`
+}
+
+// VocabAgentConfig holds vocab agent configuration (for classifying unknown words)
+type VocabAgentConfig struct {
 	Enabled  bool   `yaml:"enabled"`
 	Provider string `yaml:"provider"`
 	APIKey   string `yaml:"api_key"`
@@ -114,8 +123,14 @@ func DefaultConfig() *Config {
 			HighSignificanceThreshold: 0.15,
 			StdDeviationMultiplier:  2.0,
 		},
-		AI: AIConfig{
-			Enabled:  true,
+		AIAnalyzer: AIAnalyzerConfig{
+			Enabled:  false,
+			Provider: "groq",
+			APIKey:   "",
+			Model:    "llama-3.1-8b-instant",
+		},
+		VocabAgent: VocabAgentConfig{
+			Enabled:  false,
 			Provider: "groq",
 			APIKey:   "",
 			Model:    "llama-3.1-8b-instant",
@@ -164,7 +179,10 @@ func Load() *Config {
 		cfg.Server.Environment = env
 	}
 	if aiKey := os.Getenv("VELUM_AI_API_KEY"); aiKey != "" {
-		cfg.AI.APIKey = aiKey
+		cfg.AIAnalyzer.APIKey = aiKey
+	}
+	if vocabKey := os.Getenv("VELUM_VOCAB_AGENT_API_KEY"); vocabKey != "" {
+		cfg.VocabAgent.APIKey = vocabKey
 	}
 
 	return cfg

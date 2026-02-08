@@ -55,9 +55,9 @@ baseline:
   # Standard deviation multiplier for significance detection
   std_deviation_multiplier: 2.0
 
-# AI Layer configuration
-ai:
-  # Enable or disable AI-powered analysis
+# AI Analyzer Layer configuration (generates natural language summaries of baseline analysis)
+ai_analyzer:
+  # Enable or disable AI-powered baseline analysis summaries
   enabled: true
   
   # AI provider: "groq" (more providers coming soon)
@@ -72,20 +72,32 @@ ai:
   # Available Groq models: llama-3.1-8b-instant, llama-3.1-70b-versatile, mixtral-8x7b-32768
   model: "llama-3.1-8b-instant"
 
+# Vocab Agent Layer configuration (classifies unknown words into surface/status/flow)
+vocab_agent:
+  # Enable or disable vocab agent for dynamic vocabulary expansion
+  # When enabled, unknown words in events are classified by AI instead of marked as "uncategorized"
+  enabled: false
+  
+  # AI provider: "groq" (more providers coming soon)
+  provider: "groq"
+  
+  # API key for the AI provider
+  # Can also be set via VELUM_VOCAB_AGENT_API_KEY environment variable
+  api_key: "your-groq-api-key-here"
+  
+  # Model to use for word classification
+  model: "llama-3.1-8b-instant"
+
 # Resiliency configuration
 resiliency:
   # Rate limiting: max requests per second (protects against DDoS and memory exhaustion)
   rate_limit_requests: 100
   
-  # Circuit breaker for AI layer (prevents cascading failures)
+  # Circuit breaker for AI layers (prevents cascading failures)
   circuit_breaker:
     enabled: true
     failure_threshold: 5      # Number of consecutive failures before opening circuit
     reset_timeout: "30s"      # Time to wait before attempting recovery
-  
-  # Model to use for analysis
-  # Available Groq models: llama-3.1-8b-instant, llama-3.1-70b-versatile, mixtral-8x7b-32768
-  model: "llama-3.1-8b-instant"
 
 # Security configuration
 security:

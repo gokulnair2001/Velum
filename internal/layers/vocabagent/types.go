@@ -1,14 +1,25 @@
-package ai
+package vocabagent
 
-import (
-	"time"
+import "time"
 
-	"github.com/velum/internal/layers/baseline"
-)
+// VocabAgentResult contains the output of the vocab agent layer
+type VocabAgentResult struct {
+	// Original uncategorized words that were processed
+	UncategorizedWords []string `json:"uncategorized_words"`
 
-// Config holds configuration for the AI layer
+	// AI-determined classifications grouped by category
+	Classified *VocabData `json:"classified"`
+
+	// Whether the vocab agent was enabled and used
+	AgentEnabled bool `json:"agent_enabled"`
+
+	// Error message if classification failed
+	Error string `json:"error,omitempty"`
+}
+
+// Config holds configuration for the vocab agent layer
 type Config struct {
-	// Enabled determines if AI analysis is active
+	// Enabled determines if vocab agent is active
 	Enabled bool
 
 	// APIKey is the Groq API key
@@ -24,7 +35,19 @@ type Config struct {
 	CircuitBreaker CircuitBreakerConfig
 }
 
-// DefaultConfig returns the default AI configuration
+// CircuitBreakerConfig holds configuration for the circuit breaker
+type CircuitBreakerConfig struct {
+	// Enabled determines if the circuit breaker is active
+	Enabled bool
+
+	// FailureThreshold is the number of failures before opening the circuit
+	FailureThreshold int
+
+	// ResetTimeout is how long to wait before attempting to close the circuit
+	ResetTimeout time.Duration
+}
+
+// DefaultConfig returns the default vocab agent configuration
 func DefaultConfig() *Config {
 	return &Config{
 		Enabled: false,
@@ -36,24 +59,6 @@ func DefaultConfig() *Config {
 			ResetTimeout:     30 * time.Second,
 		},
 	}
-}
-
-// AnalysisResponse represents the structured AI analysis output
-type AnalysisResponse struct {
-	Summary        string   `json:"summary"`
-	Details        []string `json:"details"`
-	Hypotheses     []string `json:"hypotheses"`
-	ConfidenceNote string   `json:"confidence_note"`
-}
-
-// AIResult contains the output of the AI layer
-type AIResult struct {
-	// Change results from baseline comparison
-	ChangeResults []*baseline.ChangeResult `json:"change_results"`
-
-	// AI analysis (only populated when AI is enabled)
-	AIAnalysis *AnalysisResponse `json:"ai_analysis,omitempty"`
-	AIEnabled  bool              `json:"ai_enabled"`
 }
 
 // GroqRequest represents the request body for Groq API

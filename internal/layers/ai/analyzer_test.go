@@ -57,11 +57,7 @@ func TestAnalyzerDisabled(t *testing.T) {
 		t.Error("Expected AIAnalysis to be nil when AI is disabled")
 	}
 
-	// Verify original data is preserved
-	if aiResult.AnalyzedFlows == nil {
-		t.Error("Expected AnalyzedFlows to be preserved")
-	}
-
+	// Verify change results are preserved
 	if len(aiResult.ChangeResults) != 1 {
 		t.Errorf("Expected 1 change result, got %d", len(aiResult.ChangeResults))
 	}
