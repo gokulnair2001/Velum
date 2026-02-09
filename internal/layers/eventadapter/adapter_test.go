@@ -2,6 +2,7 @@ package eventadapter
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -186,51 +187,75 @@ func TestValidation(t *testing.T) {
 	}
 }
 
-func TestProcessSkipsInvalidEvents(t *testing.T) {
+func TestProcessRejectsInvalidEvents(t *testing.T) {
 	adapter := New()
 
-	input := []map[string]interface{}{
+	tests := []struct {
+		name        string
+		input       []map[string]interface{}
+		expectError bool
+		errContains string
+	}{
 		{
-			"event": "valid_event",
-			"id":    "evt_1",
-			"ts":    "2026-02-04T10:12:01Z",
+			name: "all valid events",
+			input: []map[string]interface{}{
+				{"event": "valid1", "id": "evt_1", "ts": "2026-02-04T10:12:01Z"},
+				{"event": "valid2", "id": "evt_2", "ts": "2026-02-04T10:12:02Z"},
+			},
+			expectError: false,
 		},
 		{
-			"event": "missing_id",
-			"ts":    "2026-02-04T10:12:02Z",
+			name: "event missing id",
+			input: []map[string]interface{}{
+				{"event": "valid1", "id": "evt_1", "ts": "2026-02-04T10:12:01Z"},
+				{"event": "missing_id", "ts": "2026-02-04T10:12:02Z"},
+			},
+			expectError: true,
+			errContains: "missing mandatory field: id",
 		},
 		{
-			"event": "missing_ts",
-			"id":    "evt_2",
+			name: "event missing ts",
+			input: []map[string]interface{}{
+				{"event": "missing_ts", "id": "evt_1"},
+			},
+			expectError: true,
+			errContains: "missing mandatory field: ts",
 		},
 		{
-			"event": "another_valid",
-			"id":    "evt_3",
-			"ts":    "2026-02-04T10:12:03Z",
+			name: "event missing both",
+			input: []map[string]interface{}{
+				{"event": "missing_both"},
+			},
+			expectError: true,
+			errContains: "missing mandatory fields: id, ts",
 		},
 	}
 
-	result, err := adapter.Process(input)
-	if err != nil {
-		t.Fatalf("Process failed: %v", err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := adapter.Process(tt.input)
 
-	processed, ok := result.([]*ProcessedEvent)
-	if !ok {
-		t.Fatalf("Expected []*ProcessedEvent, got %T", result)
-	}
-
-	// Should only have 2 valid events
-	if len(processed) != 2 {
-		t.Errorf("Expected 2 valid events, got %d", len(processed))
-	}
-
-	// Verify the valid events
-	if processed[0].Event != "valid_event" {
-		t.Errorf("First event = %v, want valid_event", processed[0].Event)
-	}
-	if processed[1].Event != "another_valid" {
-		t.Errorf("Second event = %v, want another_valid", processed[1].Event)
+			if tt.expectError {
+				if err == nil {
+					t.Error("Expected an error, got nil")
+					return
+				}
+				if !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("Error message should contain '%s', got '%s'", tt.errContains, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("Unexpected error: %v", err)
+				}
+				processed, ok := result.([]*ProcessedEvent)
+				if !ok {
+					t.Fatalf("Expected []*ProcessedEvent, got %T", result)
+				}
+				if len(processed) != len(tt.input) {
+					t.Errorf("Expected %d events, got %d", len(tt.input), len(processed))
+				}
+			}
+		})
 	}
 }
 

@@ -15,14 +15,16 @@ import (
 	"github.com/velum/internal/layers/eventadapter"
 	"github.com/velum/internal/layers/pattern"
 	"github.com/velum/internal/layers/sessionflow"
+	"github.com/velum/internal/layers/vocabagent"
 	"github.com/velum/internal/storage"
 )
 
 // Handler holds dependencies for HTTP handlers
 type Handler struct {
-	pipeline    *layers.Pipeline
-	storage     storage.Storage
-	environment string
+	pipeline     *layers.Pipeline
+	storage      storage.Storage
+	vocabStorage *vocabagent.SQLiteVocabStorage
+	environment  string
 }
 
 // NewHandler creates a new handler instance with the provided configuration
@@ -42,11 +44,59 @@ func NewHandler(cfg *config.Config) *Handler {
 		go startStorageCleanup(sqliteStorage, cfg.Storage.RetentionDays)
 	}
 
+	// Initialize vocabulary storage and seed with built-in vocabulary
+	var vocabStorage *vocabagent.SQLiteVocabStorage
+	vocabStorageConfig := vocabagent.DefaultSQLiteVocabConfig()
+	vocabStorage, err = vocabagent.NewSQLiteVocabStorage(vocabStorageConfig)
+	if err != nil {
+		fmt.Printf("Warning: Failed to initialize vocab storage: %v\n", err)
+	} else {
+		// Seed built-in vocabulary (only runs if storage is empty)
+		ctx := context.Background()
+		if err := vocabagent.SeedBuiltinVocabulary(ctx, vocabStorage); err != nil {
+			fmt.Printf("Warning: Failed to seed vocabulary: %v\n", err)
+		}
+	}
+
 	// Initialize the pipeline with layers
 	pipeline := layers.NewPipeline()
 
+	// Layer 0: Vocab Enricher - discovers unknown words and classifies via AI (optional)
+	// Only registered if vocab agent is enabled in config and API key is provided
+	if cfg.VocabAgent.Enabled && cfg.VocabAgent.APIKey != "" && vocabStorage != nil {
+		// Parse circuit breaker reset timeout
+		resetTimeout, err := time.ParseDuration(cfg.Resiliency.CircuitBreaker.ResetTimeout)
+		if err != nil {
+			resetTimeout = 30 * time.Second
+		}
+
+		vocabAgentConfig := &vocabagent.Config{
+			Enabled: cfg.VocabAgent.Enabled,
+			APIKey:  cfg.VocabAgent.APIKey,
+			Model:   cfg.VocabAgent.Model,
+			Debug:   cfg.Server.Environment == "development",
+			CircuitBreaker: vocabagent.CircuitBreakerConfig{
+				Enabled:          cfg.Resiliency.CircuitBreaker.Enabled,
+				FailureThreshold: cfg.Resiliency.CircuitBreaker.FailureThreshold,
+				ResetTimeout:     resetTimeout,
+			},
+		}
+		vocabAgentInstance := vocabagent.NewWithConfig(vocabAgentConfig)
+		enricher := vocabagent.NewVocabEnricher(vocabStorage, vocabAgentInstance, cfg.Server.Environment == "development")
+		pipeline.Register(enricher)
+		fmt.Println("Vocab Enricher layer enabled with model:", cfg.VocabAgent.Model)
+	} else {
+		fmt.Println("Vocab Enricher layer disabled (enabled:", cfg.VocabAgent.Enabled, ", api_key set:", cfg.VocabAgent.APIKey != "", ", storage:", vocabStorage != nil, ")")
+	}
+
 	// Layer 1: Event Adapter - normalizes raw events
-	pipeline.Register(eventadapter.New())
+	// Use vocab storage for external lookup if available
+	if vocabStorage != nil {
+		pipeline.Register(eventadapter.NewWithVocabLookup(vocabStorage))
+		fmt.Println("Event Adapter using SQLite vocabulary lookup")
+	} else {
+		pipeline.Register(eventadapter.New())
+	}
 
 	// Layer 2: Session & Flow Reconstructor - groups events into flow instances
 	pipeline.Register(sessionflow.New())
@@ -75,7 +125,7 @@ func NewHandler(cfg *config.Config) *Handler {
 
 	// Layer 6: AI Analyzer - provides AI-powered insights (optional)
 	// Only registered if AI is enabled in config and API key is provided
-	if cfg.AI.Enabled && cfg.AI.APIKey != "" {
+	if cfg.AIAnalyzer.Enabled && cfg.AIAnalyzer.APIKey != "" {
 		// Parse circuit breaker reset timeout
 		resetTimeout, err := time.ParseDuration(cfg.Resiliency.CircuitBreaker.ResetTimeout)
 		if err != nil {
@@ -84,9 +134,9 @@ func NewHandler(cfg *config.Config) *Handler {
 		}
 
 		aiConfig := &ai.Config{
-			Enabled: cfg.AI.Enabled,
-			APIKey:  cfg.AI.APIKey,
-			Model:   cfg.AI.Model,
+			Enabled: cfg.AIAnalyzer.Enabled,
+			APIKey:  cfg.AIAnalyzer.APIKey,
+			Model:   cfg.AIAnalyzer.Model,
 			Debug:   cfg.Server.Environment == "development",
 			CircuitBreaker: ai.CircuitBreakerConfig{
 				Enabled:          cfg.Resiliency.CircuitBreaker.Enabled,
@@ -95,19 +145,20 @@ func NewHandler(cfg *config.Config) *Handler {
 			},
 		}
 		pipeline.Register(ai.NewWithConfig(aiConfig))
-		fmt.Println("AI layer enabled with model:", cfg.AI.Model)
+		fmt.Println("AI Analyzer layer enabled with model:", cfg.AIAnalyzer.Model)
 		if cfg.Resiliency.CircuitBreaker.Enabled {
 			fmt.Printf("   Circuit breaker: threshold=%d, reset=%s\n",
 				cfg.Resiliency.CircuitBreaker.FailureThreshold, resetTimeout)
 		}
 	} else {
-		fmt.Println("AI layer disabled (enabled:", cfg.AI.Enabled, ", api_key set:", cfg.AI.APIKey != "", ")")
+		fmt.Println("AI Analyzer layer disabled (enabled:", cfg.AIAnalyzer.Enabled, ", api_key set:", cfg.AIAnalyzer.APIKey != "", ")")
 	}
 
 	return &Handler{
-		pipeline:    pipeline,
-		storage:     sqliteStorage,
-		environment: cfg.Server.Environment,
+		pipeline:     pipeline,
+		storage:      sqliteStorage,
+		vocabStorage: vocabStorage,
+		environment:  cfg.Server.Environment,
 	}
 }
 
@@ -204,21 +255,16 @@ func (h *Handler) Analyze(w http.ResponseWriter, r *http.Request) {
 			// AI enabled: show ai_analysis only
 			responseData["ai_analysis"] = v.AIAnalysis
 		} else {
-			// AI disabled: show data (baseline/pattern detector result)
+			// AI disabled: show only change_results with minimal format for first observations
 			responseData["data"] = map[string]interface{}{
-				"analyzed_flows":    v.AnalyzedFlows,
-				"detected_patterns": v.DetectedPatterns,
-				"change_results":    v.ChangeResults,
-				"snapshot_date":     v.SnapshotDate,
+				"change_results": formatChangeResults(v.ChangeResults),
 			}
 		}
 	case *baseline.BaselineResult:
+		// Baseline result without AI: show only change_results with minimal format for first observations
 		responseData["ai_enabled"] = false
 		responseData["data"] = map[string]interface{}{
-			"analyzed_flows":    v.AnalyzedFlows,
-			"detected_patterns": v.DetectedPatterns,
-			"change_results":    v.ChangeResults,
-			"snapshot_date":     v.SnapshotDate,
+			"change_results": formatChangeResults(v.ChangeResults),
 		}
 	case *pattern.PatternResult:
 		responseData["ai_enabled"] = false
@@ -243,4 +289,40 @@ func respondJSON(w http.ResponseWriter, status int, payload interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(payload)
+}
+
+// formatChangeResults formats change results for response
+// For first_observation, only return minimal data (pattern_type, flow, baseline_available)
+// For existing baseline, return full data
+func formatChangeResults(changeResults []*baseline.ChangeResult) []map[string]interface{} {
+	formatted := make([]map[string]interface{}, 0, len(changeResults))
+
+	for _, change := range changeResults {
+		if change.BaselineStatus == baseline.BaselineStatusFirstObservation {
+			// First observation: minimal data only
+			formatted = append(formatted, map[string]interface{}{
+				"pattern_type":       change.PatternType,
+				"flow":               change.Flow,
+				"baseline_available": false,
+			})
+		} else {
+			// Baseline exists: full data
+			formatted = append(formatted, map[string]interface{}{
+				"pattern_type":          change.PatternType,
+				"flow":                  change.Flow,
+				"baseline_available":    true,
+				"current_impact_ratio":  change.CurrentImpactRatio,
+				"baseline_impact_ratio": change.BaselineImpactRatio,
+				"delta":                 change.Delta,
+				"delta_percentage":      change.DeltaPercentage,
+				"trend":                 change.Trend,
+				"change_significance":   change.ChangeSignificance,
+				"baseline_status":       change.BaselineStatus,
+				"baseline_window":       change.BaselineWindow,
+				"baseline_days":         change.BaselineDays,
+			})
+		}
+	}
+
+	return formatted
 }

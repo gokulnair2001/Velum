@@ -1,10 +1,21 @@
 package eventadapter
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"unicode"
 )
+
+// VocabLookup defines an interface for external vocabulary lookup.
+// This allows EventAdapter to use vocabulary stored in SQLite
+// without creating circular dependencies.
+type VocabLookup interface {
+	// LookupWord returns the category for a word, or empty string if not found.
+	// Categories are: "status", "surface", "flow"
+	LookupWord(ctx context.Context, word string) (category string, err error)
+}
 
 // NormalizedEvent represents a cleaned and categorized event
 type NormalizedEvent struct {
@@ -44,7 +55,8 @@ func (p *ProcessedEvent) MarshalJSON() ([]byte, error) {
 
 // EventAdapter is the first layer - cleans raw events into consumable data
 type EventAdapter struct {
-	vocab *Vocabulary
+	vocab       *Vocabulary
+	vocabLookup VocabLookup // Optional external vocab lookup (e.g., SQLite)
 }
 
 // New creates a new EventAdapter with default vocabulary
@@ -58,6 +70,14 @@ func New() *EventAdapter {
 func NewWithVocabulary(vocab *Vocabulary) *EventAdapter {
 	return &EventAdapter{
 		vocab: vocab,
+	}
+}
+
+// NewWithVocabLookup creates an EventAdapter with external vocabulary lookup
+func NewWithVocabLookup(lookup VocabLookup) *EventAdapter {
+	return &EventAdapter{
+		vocab:       NewVocabulary(),
+		vocabLookup: lookup,
 	}
 }
 
@@ -78,16 +98,17 @@ func (e *EventAdapter) Process(input interface{}) (interface{}, error) {
 		}
 		return results, nil
 	case map[string]interface{}:
-		if !e.isValidEvent(v) {
-			return nil, nil // Skip invalid events
+		if err := e.validateEvent(v, 0); err != nil {
+			return nil, err
 		}
 		return e.processEventMap(v), nil
 	case []map[string]interface{}:
 		results := make([]*ProcessedEvent, 0, len(v))
-		for _, event := range v {
-			if e.isValidEvent(event) {
-				results = append(results, e.processEventMap(event))
+		for i, event := range v {
+			if err := e.validateEvent(event, i); err != nil {
+				return nil, err
 			}
+			results = append(results, e.processEventMap(event))
 		}
 		return results, nil
 	default:
@@ -95,19 +116,27 @@ func (e *EventAdapter) Process(input interface{}) (interface{}, error) {
 	}
 }
 
-// isValidEvent checks if the event has the mandatory fields: id and ts
+// validateEvent checks if the event has mandatory fields (id, ts) and returns an error if missing
+func (e *EventAdapter) validateEvent(event map[string]interface{}, index int) error {
+	_, hasID := event["id"]
+	_, hasTS := event["ts"]
+
+	if !hasID && !hasTS {
+		return fmt.Errorf("event at index %d missing mandatory fields: id, ts", index)
+	}
+	if !hasID {
+		return fmt.Errorf("event at index %d missing mandatory field: id", index)
+	}
+	if !hasTS {
+		return fmt.Errorf("event at index %d missing mandatory field: ts", index)
+	}
+
+	return nil
+}
+
+// isValidEvent returns true if the event has all mandatory fields (id, ts)
 func (e *EventAdapter) isValidEvent(event map[string]interface{}) bool {
-	// Check for id field
-	if _, hasID := event["id"]; !hasID {
-		return false
-	}
-
-	// Check for ts field
-	if _, hasTS := event["ts"]; !hasTS {
-		return false
-	}
-
-	return true
+	return e.validateEvent(event, 0) == nil
 }
 
 // processEventMap handles a map-based event and preserves all original fields
@@ -188,6 +217,29 @@ func (e *EventAdapter) NormalizeEventString(eventStr string) *NormalizedEvent {
 				normalized.Flow = append(normalized.Flow, norm)
 			}
 			categorized = true
+		}
+
+		// If still not categorized, try external vocabulary lookup (SQLite)
+		if !categorized && e.vocabLookup != nil {
+			if category, err := e.vocabLookup.LookupWord(context.Background(), lower); err == nil && category != "" {
+				switch category {
+				case "status":
+					if !contains(normalized.Status, lower) {
+						normalized.Status = append(normalized.Status, lower)
+					}
+					categorized = true
+				case "surface":
+					if !contains(normalized.Surface, lower) {
+						normalized.Surface = append(normalized.Surface, lower)
+					}
+					categorized = true
+				case "flow":
+					if !contains(normalized.Flow, lower) {
+						normalized.Flow = append(normalized.Flow, lower)
+					}
+					categorized = true
+				}
+			}
 		}
 
 		if !categorized && len(lower) > 1 {
