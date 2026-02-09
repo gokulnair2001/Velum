@@ -9,14 +9,31 @@ import (
 
 // Config holds application configuration
 type Config struct {
-	Server     ServerConfig     `yaml:"server"`
-	CORS       CORSConfig       `yaml:"cors"`
-	Resiliency ResiliencyConfig `yaml:"resiliency"`
-	Storage    StorageConfig    `yaml:"storage"`
-	Baseline   BaselineConfig   `yaml:"baseline"`
-	AIAnalyzer AIAnalyzerConfig `yaml:"ai_analyzer"`
-	VocabAgent VocabAgentConfig `yaml:"vocab_agent"`
-	Security   SecurityConfig   `yaml:"security"`
+	Server      ServerConfig      `yaml:"server"`
+	CORS        CORSConfig        `yaml:"cors"`
+	Resiliency  ResiliencyConfig  `yaml:"resiliency"`
+	Storage     StorageConfig     `yaml:"storage"`
+	Baseline    BaselineConfig    `yaml:"baseline"`
+	AIAnalyzer  AIAnalyzerConfig  `yaml:"ai_analyzer"`
+	VocabAgent  VocabAgentConfig  `yaml:"vocab_agent"`
+	Security    SecurityConfig    `yaml:"security"`
+	DataMapping DataMappingConfig `yaml:"data_mapping"`
+}
+
+// DataMappingConfig holds declarative data mapping configuration
+type DataMappingConfig struct {
+	Enabled bool                        `yaml:"enabled"`
+	Mapping map[string]FieldMappingSpec `yaml:"mapping"`
+}
+
+// FieldMappingSpec defines how to extract a field from raw events
+// Can be specified as:
+//   - Simple: paths only (list of fallback paths)
+//   - Complex: paths + format + required flag
+type FieldMappingSpec struct {
+	Paths    []string `yaml:"paths"`              // Fallback paths to try (e.g., "payload.event.action")
+	Format   string   `yaml:"format,omitempty"`   // For timestamps: epoch_ms, epoch_s, iso8601
+	Required bool     `yaml:"required,omitempty"` // If true, error when all paths fail
 }
 
 // ServerConfig holds server-related configuration
@@ -138,6 +155,10 @@ func DefaultConfig() *Config {
 		Security: SecurityConfig{
 			Enabled:    false,
 			APIKeyHash: "",
+		},
+		DataMapping: DataMappingConfig{
+			Enabled: false,
+			Mapping: nil,
 		},
 	}
 }
