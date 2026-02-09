@@ -1,90 +1,191 @@
 # Velum
 
-**Behavioral Infrastructure Layer for Analytics Data**
+### Transform Analytics Events into Behavioral Intelligence
 
-Velum sits on top of your analytics event data and extracts behavioral insights. It transforms analytical/metric-focused data into behavioral/story-rich insights, shifting the focus from "why did this error occur?" to "why is there a gap in user behavior?"
+Velum is a behavioral infrastructure layer that sits between your raw analytics data and your decision-making systems. It automatically detects patterns like user hesitation, retry storms, silent abandonments, and confused navigation — insights that traditional metrics dashboards completely miss.
+
+**Stop asking "what happened?" and start understanding "why users behave this way."**
 
 ---
 
-## Getting Started
+## Why Velum?
+
+Traditional analytics tells you *what* happened:
+- 500 button clicks
+- 12% drop-off rate
+- 3.2s average load time
+
+Velum tells you *why* it matters:
+- "Users are hesitating before checkout — 40% pause for 5+ seconds"
+- "Retry storm detected in payment flow — users clicking submit 3+ times"
+- "Silent abandonment pattern — users scroll but never interact"
+
+---
+
+## Quick Start
 
 ### Prerequisites
-- Go 1.21 or higher
+
+| Requirement | Version | Notes |
+|-------------|---------|-------|
+| Go | 1.21+ | [Download Go](https://go.dev/dl/) |
+| SQLite | 3.x | Usually pre-installed on macOS/Linux |
 
 ### Installation
+
 ```bash
+# Clone the repository
+git clone https://github.com/your-org/velum.git
+cd velum
+
+# Install dependencies
 go mod tidy
+
+# Copy the example configuration
+cp example.config.yaml config.yaml
 ```
 
-### Running the Server
+### Configuration
+
+Edit `config.yaml` to customize Velum for your environment:
+
+```yaml
+# Server settings
+server:
+  port: "8080"
+  host: "0.0.0.0"
+  environment: "development"
+
+# Security - generate your own API key hash
+# Run: echo -n "your-secret-key" | shasum -a 256
+security:
+  enabled: true
+  api_key_hash: "your-sha256-hash-here"
+
+# AI-powered vocabulary expansion (optional)
+vocab_agent:
+  enabled: false
+  api_key: ""  # Your Groq API key
+  model: "llama-3.1-8b-instant"
+
+# AI-powered analysis summaries (optional)
+ai_analyzer:
+  enabled: false
+  api_key: ""  # Your Groq API key
+```
+
+### Generate API Key
+
+Velum uses SHA-256 hashed API keys for authentication:
+
 ```bash
-go run cmd/velum/main.go
+# Generate hash for your API key
+echo -n "my-secret-api-key" | shasum -a 256
+# Output: 3e84b4a0d4bc2a9dfc3d6e5f0b1c8a7d...
+
+# Add this hash to config.yaml under security.api_key_hash
 ```
 
-The server starts on port `8080` by default. Configure with environment variables:
-- `VELUM_PORT` - Server port (default: `8080`)
-- `VELUM_ENV` - Environment (default: `development`)
+### Start the Server
+
+```bash
+# Run the server
+go run cmd/velum/main.go
+
+# Or build and run
+go build -o velum cmd/velum/main.go
+./velum
+```
+
+You should see:
+```
+Loaded configuration from config.yaml
+Vocabulary already seeded (180 entries), skipping
+🚀 Velum server starting on 0.0.0.0:8080
+   Environment: development
+```
+
+### Verify Installation
+
+```bash
+# Health check
+curl http://localhost:8080/health
+
+# Expected response:
+# {"status":"healthy","service":"velum"}
+```
 
 ---
 
-## API Endpoints
+## Your First Analysis
 
-### Health Check
-```
-GET /health
+Send analytics events to Velum and receive behavioral insights:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/analyze \
+  -H "Content-Type: application/json" \
+  -H "X-Infra-Key: my-secret-api-key" \
+  -d '{
+    "events": [
+      {"id": "1", "event": "checkout_view", "ts": "2026-02-04T10:00:00Z", "user_id": 101},
+      {"id": "2", "event": "checkout_scroll", "ts": "2026-02-04T10:00:15Z", "user_id": 101},
+      {"id": "3", "event": "checkout_scroll", "ts": "2026-02-04T10:00:30Z", "user_id": 101},
+      {"id": "4", "event": "checkout_close", "ts": "2026-02-04T10:00:45Z", "user_id": 101}
+    ]
+  }'
 ```
 
 **Response:**
 ```json
 {
-  "status": "healthy",
-  "service": "velum"
+  "success": true,
+  "message": "Behavioral analysis complete",
+  "data": {
+    "change_results": [
+      {
+        "flow": "checkout",
+        "pattern_type": "silent_abandonment",
+        "baseline_available": false
+      }
+    ]
+  }
 }
 ```
 
-### Analyze Events
-```
-POST /api/v1/analyze
-```
-
-Processes raw analytics events through Velum's behavioral layers.
+Velum detected a **silent abandonment** — the user viewed and scrolled but left without interacting.
 
 ---
 
-## Raw Event Format
+## API Reference
 
-Velum expects events in JSON format with the following structure:
+### Authentication
 
-### Required Fields
+All API requests require the `X-Infra-Key` header:
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `event` | `string` | The event name/identifier to be normalized |
-| `id` | `string` | Unique event identifier |
-| `ts` | `string` (ISO 8601) | Timestamp of the event |
+```bash
+curl -H "X-Infra-Key: your-api-key" http://localhost:8080/api/v1/analyze
+```
 
-> **Note:** Events missing `id` or `ts` fields will be skipped and excluded from processing.
+### Endpoints
 
-### Recommended Fields
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/health` | Health check (no auth required) |
+| POST | `/api/v1/analyze` | Analyze analytics events |
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `session_id` | `string` | Session identifier |
+### Event Format
 
-> **💡 Tip:** Including `session_id` with each event enables stronger behavioral analysis. Session data allows Velum to group events into user journeys, detect patterns across interactions, and identify behavioral gaps within a single session context.
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | string | ✅ | Unique event identifier |
+| `event` | string | ✅ | Event name (e.g., `button_click_success`) |
+| `ts` | string | ✅ | ISO 8601 timestamp |
+| `user_id` | string/number | Recommended | User identifier for flow grouping |
+| `session_id` | string | Optional | Session identifier for higher confidence |
 
-### Optional Fields
+### Event Naming
 
-All other fields are passed through unchanged. Common fields include:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `user_id` | `string` or `number` | User identifier |
-| `properties` | `object` | Additional event properties |
-
-### Event Naming Conventions
-
-Velum's event adapter can parse events in multiple formats:
+Velum automatically parses multiple naming conventions:
 
 | Format | Example |
 |--------|---------|
@@ -95,212 +196,189 @@ Velum's event adapter can parse events in multiple formats:
 
 ---
 
-## Request Example
+## Processing Pipeline
 
-```bash
-curl -X POST http://localhost:8080/api/v1/analyze \
-  -H "Content-Type: application/json" \
-  -d '{
-    "events": [
-      {
-        "event": "checkout_payment_click",
-        "id": "evt_123",
-        "user_id": 222,
-        "ts": "2026-02-04T10:12:01Z",
-        "session_id": "sess_abc",
-        "properties": {
-          "amount": 99.99,
-          "currency": "USD"
-        }
-      },
-      {
-        "event": "login_modal_view",
-        "id": "evt_124",
-        "user_id": 222,
-        "ts": "2026-02-04T10:12:05Z"
-      }
-    ]
-  }'
+Velum processes events through a layered pipeline:
+
+```
+Raw Events → Event Adapter → Session Flow → Behavior Analyzer → Pattern Detector → Baseline Detector
 ```
 
+### Layer 1: Event Adapter
+Normalizes event names into structured vocabulary:
+- `checkout_payment_click` → `{surface: [checkout], flow: [payment], status: [click]}`
+
+### Layer 2: Session Flow Reconstructor
+Groups events into user journeys:
+- Groups by `user_id` and `session_id`
+- Detects flow boundaries (start/end conditions)
+
+### Layer 3: Behavior Analyzer
+Identifies individual behaviors:
+- Hesitation (long pauses between events)
+- Retries (repeated actions)
+- Abandonment (incomplete flows)
+
+### Layer 4: Pattern Detector
+Aggregates behaviors into patterns:
+- **Retry Storm:** >30% of users retry the same action
+- **Silent Abandonment:** Users view but never interact
+- **Confusion Loop:** Repeated navigation without progress
+- **Early Dropoff:** Users abandon immediately after starting
+
+### Layer 5: Baseline Detector
+Compares current patterns against historical baselines to detect anomalies.
+
 ---
 
-## Response Example
+## Vocabulary System
 
-```json
-{
-  "success": true,
-  "message": "Behavioral analysis complete",
-  "data": {
-    "events_received": 2,
-    "layers_processed": ["event_adapter"],
-    "normalized_events": [
-      {
-        "event": "checkout_payment_click",
-        "id": "evt_123",
-        "user_id": 222,
-        "ts": "2026-02-04T10:12:01Z",
-        "session_id": "sess_abc",
-        "properties": {
-          "amount": 99.99,
-          "currency": "USD"
-        },
-        "normalized": {
-          "original": "checkout_payment_click",
-          "tokens": ["checkout", "payment", "click"],
-          "status": ["click"],
-          "surface": ["checkout"],
-          "flow": ["payment"]
-        }
-      },
-      {
-        "event": "login_modal_view",
-        "id": "evt_124",
-        "user_id": 222,
-        "ts": "2026-02-04T10:12:05Z",
-        "normalized": {
-          "original": "login_modal_view",
-          "tokens": ["login", "modal", "view"],
-          "status": ["view"],
-          "surface": ["modal", "view"],
-          "flow": ["authentication"]
-        }
-      }
-    ]
-  }
-}
+Velum classifies event tokens into three categories:
+
+### Status (What happened)
+Action states and results:
+- `click`, `view`, `success`, `failed`, `error`, `pending`, `open`, `close`
+
+### Surface (Where it happened)
+UI components and locations:
+- `button`, `modal`, `form`, `checkout`, `sidebar`, `header`
+
+### Flow (User intent)
+Business processes and goals:
+- `payment`, `authentication`, `registration`, `sharing`, `search`
+
+### Dynamic Vocabulary (Optional)
+
+When `vocab_agent` is enabled, Velum uses AI to classify unknown words:
+
+```yaml
+vocab_agent:
+  enabled: true
+  api_key: "your-groq-api-key"
 ```
 
----
-
-## Normalized Event Structure
-
-The `normalized` object contains:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `original` | `string` | The original event string |
-| `tokens` | `string[]` | Individual tokens extracted from the event |
-| `status` | `string[]` | Event states (e.g., `click`, `view`, `success`, `failed`) |
-| `surface` | `string[]` | UI locations (e.g., `modal`, `checkout`, `sidebar`) |
-| `flow` | `string[]` | User intents (e.g., `authentication`, `payment`, `creation`) |
-| `uncategorized` | `string[]` | Tokens not matching any vocabulary category |
+Unknown words are automatically classified and stored in SQLite for future use.
 
 ---
 
-## Flow Instance Structure
+## Configuration Reference
 
-After Layer 2 processing, events are grouped into flow instances:
+### Server Settings
 
-```json
-{
-  "flow_instance_id": "flow_1738749600000000000_1",
-  "user_id": "222",
-  "flow": "payment",
-  "context_type": "explicit_session",
-  "confidence": "high",
-  "start_time": "2026-02-04T10:00:00Z",
-  "end_time": "2026-02-04T10:02:00Z",
-  "is_complete": true,
-  "events": [
-    {
-      "timestamp": "2026-02-04T10:00:00Z",
-      "surface": "checkout",
-      "status": "view",
-      "raw_event_name": "checkout_view",
-      "session_id": "sess_abc"
-    },
-    {
-      "timestamp": "2026-02-04T10:01:00Z",
-      "surface": "button",
-      "status": "click",
-      "raw_event_name": "payment_click",
-      "session_id": "sess_abc"
-    },
-    {
-      "timestamp": "2026-02-04T10:02:00Z",
-      "surface": "modal",
-      "status": "success",
-      "raw_event_name": "payment_success",
-      "session_id": "sess_abc"
-    }
-  ]
-}
+```yaml
+server:
+  port: "8080"           # Server port
+  host: "0.0.0.0"        # Bind address
+  environment: "development"  # development, staging, production
+  read_timeout: "10s"    # Request read timeout
+  write_timeout: "30s"   # Response write timeout
+  shutdown_timeout: "15s" # Graceful shutdown timeout
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `flow_instance_id` | `string` | Unique identifier for this flow attempt |
-| `user_id` | `string` | User who performed this flow |
-| `flow` | `string` | Flow type (e.g., `payment`, `authentication`) |
-| `context_type` | `string` | `explicit_session` if all events share session_id, otherwise `windowed` |
-| `confidence` | `string` | `high`, `medium`, or `low` based on context completeness |
-| `is_complete` | `boolean` | Whether the flow ended with success |
-| `events` | `array` | Ordered list of events in this flow instance |
+### Storage
 
-### Flow Reconstruction Rules
+```yaml
+storage:
+  retention_days: 90     # How long to keep historical data
+```
 
-- **Grouping:** Events are grouped by `user_id` - events from different users are never mixed
-- **Ordering:** Events are sorted strictly by timestamp within each user
-- **Flow Start:** A new flow instance starts when a `view` or `start` status is seen
-- **Flow End:** A flow instance ends on `success`, `dismiss`, or timeout (default: 30 minutes)
-- **Multiple Instances:** The same user can have multiple instances of the same flow
-- **No Inference:** The layer does NOT infer behavior (retries, hesitation, abandonment)
+### Baseline Detection
 
----
+```yaml
+baseline:
+  window_days: 28        # Days for baseline computation
+  min_days: 7            # Minimum days before computing baseline
+  trend_threshold: 0.10  # 10% change = trend
+```
 
-## Vocabulary Categories
+### Security
 
-### Status Keywords
-Words denoting the result or state of an event:
-- **Success states:** `success`, `complete`, `done`, `ok`
-- **Failure states:** `failed`, `error`
-- **Pending states:** `pending`, `loading`, `processing`
-- **Interaction states:** `click`, `tap`, `press`, `view`, `dismiss`
+```yaml
+security:
+  enabled: true
+  api_key_hash: "sha256-hash"  # echo -n "key" | shasum -a 256
+```
 
-### Surface Keywords
-Words denoting UI components or locations:
-- **Navigation:** `home`, `nav`, `sidebar`, `header`, `footer`
-- **Commerce:** `checkout`, `cart`, `product`, `catalog`
-- **Components:** `modal`, `button`, `form`, `input`, `dropdown`, `card`
-- **Screens:** `dashboard`, `settings`, `profile`, `search`
+### Environment Variables
 
-### Flow Keywords
-Words denoting user intent or actions:
-- **Authentication:** `login`, `logout`, `signin`, `signup`
-- **CRUD:** `create`, `add`, `update`, `edit`, `delete`, `remove`
-- **Commerce:** `payment`, `purchase`, `order`, `refund`
-- **Navigation:** `search`, `filter`, `scroll`, `navigate`
+Configuration can be overridden with environment variables:
+
+| Variable | Description |
+|----------|-------------|
+| `VELUM_AI_API_KEY` | AI Analyzer API key |
+| `VELUM_VOCAB_AGENT_API_KEY` | Vocab Agent API key |
 
 ---
 
 ## Project Structure
 
 ```
-Velum/
-├── cmd/
-│   └── velum/
-│       └── main.go              # Application entry point
+velum/
+├── cmd/velum/
+│   └── main.go                 # Application entry point
+├── config.yaml                 # Configuration file
+├── data/                       # SQLite databases (auto-created)
+│   ├── velum.db               # Event storage
+│   └── velum_vocab.db         # Vocabulary storage
 ├── internal/
 │   ├── api/
-│   │   ├── server.go            # HTTP server & routing
-│   │   └── handlers/
-│   │       └── handler.go       # Request handlers
-│   ├── config/
-│   │   └── config.go            # Configuration management
-│   └── layers/
-│       ├── layer.go             # Layer interface & pipeline
-│       ├── eventadapter/        # Layer 1: Event normalization
-│       │   ├── adapter.go
-│       │   ├── vocabulary.go
-│       │   └── adapter_test.go
-│       └── sessionflow/         # Layer 2: Session & Flow Reconstruction
-│           ├── types.go
-│           ├── reconstructor.go
-│           └── reconstructor_test.go
-├── go.mod
-└── README.md
+│   │   ├── server.go          # HTTP server & routing
+│   │   ├── handlers/          # Request handlers
+│   │   └── middleware/        # Auth & security middleware
+│   ├── config/                # Configuration management
+│   ├── layers/
+│   │   ├── layer.go           # Layer interface & pipeline
+│   │   ├── eventadapter/      # Layer 1: Event normalization
+│   │   ├── sessionflow/       # Layer 2: Flow reconstruction
+│   │   ├── behavior/          # Layer 3: Behavior analysis
+│   │   ├── pattern/           # Layer 4: Pattern detection
+│   │   ├── baseline/          # Layer 5: Baseline comparison
+│   │   ├── ai/                # AI-powered analysis
+│   │   └── vocabagent/        # AI vocabulary expansion
+│   └── storage/               # SQLite storage layer
+└── go.mod
 ```
+
+---
+
+## Running Tests
+
+```bash
+# Run all tests
+go test ./...
+
+# Run with verbose output
+go test ./... -v
+
+# Run specific package tests
+go test ./internal/layers/vocabagent/... -v
+```
+
+---
+
+## Troubleshooting
+
+### "Invalid API key" error
+
+Verify your API key hash:
+```bash
+echo -n "your-key" | shasum -a 256
+```
+Ensure the hash in `config.yaml` matches exactly (no trailing newline).
+
+### "Address already in use"
+
+Kill the existing process:
+```bash
+lsof -ti:8080 | xargs kill -9
+```
+
+### Events showing "unknown" flow
+
+Your event vocabulary isn't recognized. Options:
+1. Enable `vocab_agent` to auto-classify new words
+2. Add words to `internal/layers/eventadapter/vocabulary.go`
+3. Check the SQLite vocab database: `sqlite3 ./data/velum_vocab.db "SELECT * FROM vocabulary"`
 
 ---
 
