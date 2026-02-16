@@ -4,53 +4,46 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
-	"path/filepath"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/velum/internal/config"
+	_ "github.com/lib/pq"
 )
 
-// SQLiteStorage implements Storage interface with SQLite persistence
-type SQLiteStorage struct {
+// PostgresStorage implements Storage interface with PostgreSQL persistence
+type PostgresStorage struct {
 	db            *sql.DB
 	retentionDays int
-	dbPath        string
+	connStr       string
 }
 
-// SQLiteConfig holds configuration for SQLite storage
-type SQLiteConfig struct {
-	// DBPath is the path to the SQLite database file
-	DBPath string
-
-	// RetentionDays is how long to keep snapshots (0 = forever)
-	RetentionDays int
-}
-
-// DefaultSQLiteConfig returns default SQLite configuration
-func DefaultSQLiteConfig() *SQLiteConfig {
-	return &SQLiteConfig{
-		DBPath:        "./data/velum_baselines.db",
-		RetentionDays: 90, // Keep 90 days of data
-	}
-}
-
-// NewSQLiteStorage creates a new SQLite-backed storage
-func NewSQLiteStorage(config *SQLiteConfig) (*SQLiteStorage, error) {
+// NewPostgresStorage creates a new PostgreSQL-backed storage
+func NewPostgresStorage(config *config.PostgresStorageConfig, retentionDays int) (*PostgresStorage, error) {
 	if config == nil {
-		config = DefaultSQLiteConfig()
+		return nil, fmt.Errorf("postgres config is nil")
 	}
 
-	// Ensure directory exists
-	dir := filepath.Dir(config.DBPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create data directory: %w", err)
-	}
+	// Build connection string
+	connStr := fmt.Sprintf(
+		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
+		config.Host,
+		config.Port,
+		config.User,
+		config.Password,
+		config.Database,
+		config.SSLMode,
+	)
 
-	db, err := sql.Open("sqlite3", config.DBPath)
+	// Open database connection
+	db, err := sql.Open("postgres", connStr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
+
+	// Configure connection pool
+	db.SetMaxOpenConns(config.MaxConnections)
+	db.SetMaxIdleConns(config.MaxConnections / 2)
+	db.SetConnMaxLifetime(time.Hour)
 
 	// Test connection
 	if err := db.Ping(); err != nil {
@@ -58,10 +51,10 @@ func NewSQLiteStorage(config *SQLiteConfig) (*SQLiteStorage, error) {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
-	storage := &SQLiteStorage{
+	storage := &PostgresStorage{
 		db:            db,
-		retentionDays: config.RetentionDays,
-		dbPath:        config.DBPath,
+		retentionDays: retentionDays,
+		connStr:       connStr,
 	}
 
 	// Initialize schema
@@ -74,10 +67,10 @@ func NewSQLiteStorage(config *SQLiteConfig) (*SQLiteStorage, error) {
 }
 
 // initSchema creates the required tables if they don't exist
-func (s *SQLiteStorage) initSchema() error {
+func (s *PostgresStorage) initSchema() error {
 	schema := `
 		CREATE TABLE IF NOT EXISTS pattern_snapshots (
-			date TEXT NOT NULL,
+			date DATE NOT NULL,
 			pattern_type TEXT NOT NULL,
 			flow TEXT NOT NULL,
 
@@ -89,7 +82,7 @@ func (s *SQLiteStorage) initSchema() error {
 			confidence TEXT,
 			pattern_version TEXT NOT NULL,
 
-			created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
 			PRIMARY KEY (date, pattern_type, flow)
 		);
@@ -103,7 +96,7 @@ func (s *SQLiteStorage) initSchema() error {
 }
 
 // StoreSnapshot persists a pattern snapshot (upsert)
-func (s *SQLiteStorage) StoreSnapshot(ctx context.Context, snapshot *PatternSnapshot) error {
+func (s *PostgresStorage) StoreSnapshot(ctx context.Context, snapshot *PatternSnapshot) error {
 	query := `
 		INSERT INTO pattern_snapshots (
 			date,
@@ -116,15 +109,15 @@ func (s *SQLiteStorage) StoreSnapshot(ctx context.Context, snapshot *PatternSnap
 			confidence,
 			pattern_version
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		ON CONFLICT(date, pattern_type, flow)
 		DO UPDATE SET
-			affected_users = excluded.affected_users,
-			total_flows = excluded.total_flows,
-			impact_ratio = excluded.impact_ratio,
-			severity = excluded.severity,
-			confidence = excluded.confidence,
-			pattern_version = excluded.pattern_version
+			affected_users = EXCLUDED.affected_users,
+			total_flows = EXCLUDED.total_flows,
+			impact_ratio = EXCLUDED.impact_ratio,
+			severity = EXCLUDED.severity,
+			confidence = EXCLUDED.confidence,
+			pattern_version = EXCLUDED.pattern_version
 	`
 
 	dateStr := snapshot.Date.Format("2006-01-02")
@@ -145,7 +138,7 @@ func (s *SQLiteStorage) StoreSnapshot(ctx context.Context, snapshot *PatternSnap
 }
 
 // FetchBaselineSnapshots retrieves historical snapshots for baseline computation
-func (s *SQLiteStorage) FetchBaselineSnapshots(
+func (s *PostgresStorage) FetchBaselineSnapshots(
 	ctx context.Context,
 	patternType, flow string,
 	endDate time.Time,
@@ -167,10 +160,10 @@ func (s *SQLiteStorage) FetchBaselineSnapshots(
 			confidence,
 			pattern_version
 		FROM pattern_snapshots
-		WHERE pattern_type = ?
-		  AND flow = ?
-		  AND date >= ?
-		  AND date <= ?
+		WHERE pattern_type = $1
+		  AND flow = $2
+		  AND date >= $3
+		  AND date <= $4
 		ORDER BY date ASC
 	`
 
@@ -221,7 +214,7 @@ func (s *SQLiteStorage) FetchBaselineSnapshots(
 }
 
 // Cleanup removes snapshots older than retention period
-func (s *SQLiteStorage) Cleanup(ctx context.Context) (int64, error) {
+func (s *PostgresStorage) Cleanup(ctx context.Context) (int64, error) {
 	if s.retentionDays <= 0 {
 		return 0, nil // No cleanup if retention is disabled
 	}
@@ -229,7 +222,7 @@ func (s *SQLiteStorage) Cleanup(ctx context.Context) (int64, error) {
 	cutoffDate := time.Now().UTC().AddDate(0, 0, -s.retentionDays)
 	cutoffStr := cutoffDate.Format("2006-01-02")
 
-	query := `DELETE FROM pattern_snapshots WHERE date < ?`
+	query := `DELETE FROM pattern_snapshots WHERE date < $1`
 
 	result, err := s.db.ExecContext(ctx, query, cutoffStr)
 	if err != nil {
@@ -240,15 +233,14 @@ func (s *SQLiteStorage) Cleanup(ctx context.Context) (int64, error) {
 }
 
 // Close closes the database connection
-func (s *SQLiteStorage) Close() error {
+func (s *PostgresStorage) Close() error {
 	return s.db.Close()
 }
 
 // GetStats returns storage statistics (implements Stats interface)
-func (s *SQLiteStorage) GetStats(ctx context.Context) (map[string]interface{}, error) {
+func (s *PostgresStorage) GetStats(ctx context.Context) (map[string]interface{}, error) {
 	stats := make(map[string]interface{})
-	stats["storage_type"] = "sqlite"
-	stats["db_path"] = s.dbPath
+	stats["storage_type"] = "postgresql"
 	stats["retention_days"] = s.retentionDays
 
 	// Total snapshots
@@ -277,7 +269,7 @@ func (s *SQLiteStorage) GetStats(ctx context.Context) (map[string]interface{}, e
 
 	// Date range
 	var minDate, maxDate sql.NullString
-	err = s.db.QueryRowContext(ctx, "SELECT MIN(date), MAX(date) FROM pattern_snapshots").Scan(&minDate, &maxDate)
+	err = s.db.QueryRowContext(ctx, "SELECT MIN(date)::text, MAX(date)::text FROM pattern_snapshots").Scan(&minDate, &maxDate)
 	if err != nil {
 		return nil, err
 	}
@@ -289,9 +281,4 @@ func (s *SQLiteStorage) GetStats(ctx context.Context) (map[string]interface{}, e
 	}
 
 	return stats, nil
-}
-
-// GetDBPath returns the database file path
-func (s *SQLiteStorage) GetDBPath() string {
-	return s.dbPath
 }

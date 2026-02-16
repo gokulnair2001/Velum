@@ -20,7 +20,7 @@ type PatternSnapshot struct {
 }
 
 // Storage defines the interface for baseline data persistence
-// Any storage backend (SQLite, PostgreSQL, file, etc.) must implement this
+// Any storage backend (PostgreSQL, etc.) must implement this
 type Storage interface {
 	// FetchBaselineSnapshots retrieves historical snapshots for a pattern+flow
 	// Used for baseline computation

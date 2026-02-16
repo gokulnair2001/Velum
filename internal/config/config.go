@@ -56,8 +56,8 @@ type CORSConfig struct {
 
 // ResiliencyConfig holds resiliency-related configuration
 type ResiliencyConfig struct {
-	RateLimitRequests int                   `yaml:"rate_limit_requests"` // Requests per second
-	CircuitBreaker    CircuitBreakerConfig  `yaml:"circuit_breaker"`
+	RateLimitRequests int                  `yaml:"rate_limit_requests"` // Requests per second
+	CircuitBreaker    CircuitBreakerConfig `yaml:"circuit_breaker"`
 }
 
 // CircuitBreakerConfig holds circuit breaker configuration for AI layer
@@ -69,17 +69,30 @@ type CircuitBreakerConfig struct {
 
 // StorageConfig holds storage-related configuration
 type StorageConfig struct {
-	RetentionDays int `yaml:"retention_days"`
+	Type          string                `yaml:"type"` // "postgres"
+	RetentionDays int                   `yaml:"retention_days"`
+	Postgres      PostgresStorageConfig `yaml:"postgres"`
+}
+
+// PostgresStorageConfig holds PostgreSQL-specific configuration
+type PostgresStorageConfig struct {
+	Host           string `yaml:"host"`
+	Port           int    `yaml:"port"`
+	Database       string `yaml:"database"`
+	User           string `yaml:"user"`
+	Password       string `yaml:"password"`
+	SSLMode        string `yaml:"ssl_mode"`
+	MaxConnections int    `yaml:"max_connections"`
 }
 
 // BaselineConfig holds baseline detection configuration
 type BaselineConfig struct {
-	WindowDays              int     `yaml:"window_days"`
-	MinDays                 int     `yaml:"min_days"`
-	ComputationMode         string  `yaml:"computation_mode"` // "daily" or "always"
-	TrendThreshold          float64 `yaml:"trend_threshold"`
+	WindowDays                int     `yaml:"window_days"`
+	MinDays                   int     `yaml:"min_days"`
+	ComputationMode           string  `yaml:"computation_mode"` // "daily" or "always"
+	TrendThreshold            float64 `yaml:"trend_threshold"`
 	HighSignificanceThreshold float64 `yaml:"high_significance_threshold"`
-	StdDeviationMultiplier  float64 `yaml:"std_deviation_multiplier"`
+	StdDeviationMultiplier    float64 `yaml:"std_deviation_multiplier"`
 }
 
 // AIAnalyzerConfig holds AI analyzer layer configuration (for baseline analysis summaries)
@@ -130,15 +143,16 @@ func DefaultConfig() *Config {
 			},
 		},
 		Storage: StorageConfig{
+			Type:          "postgres",
 			RetentionDays: 90,
 		},
 		Baseline: BaselineConfig{
-			WindowDays:              28,
-			MinDays:                 7,
-			ComputationMode:         "daily",
-			TrendThreshold:          0.10,
+			WindowDays:                28,
+			MinDays:                   7,
+			ComputationMode:           "daily",
+			TrendThreshold:            0.10,
 			HighSignificanceThreshold: 0.15,
-			StdDeviationMultiplier:  2.0,
+			StdDeviationMultiplier:    2.0,
 		},
 		AIAnalyzer: AIAnalyzerConfig{
 			Enabled:  false,

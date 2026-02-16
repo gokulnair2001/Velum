@@ -249,8 +249,24 @@ resiliency:
 
 ```yaml
 storage:
-  retention_days: 90  # Auto-delete data older than this
+  type: "postgres"      # Storage backend: "postgres"
+  retention_days: 90    # Auto-delete pattern snapshots older than this
+
+  # PostgreSQL configuration
+  postgres:
+    host: "localhost"
+    port: 5432
+    database: "velum"
+    user: "velum_user"
+    password: "your_password"
+    ssl_mode: "prefer"        # prefer, require, disable
+    max_connections: 25
 ```
+
+**What gets stored**
+- Pattern snapshots and baseline history (not raw events).
+- Storage backend is selected by `storage.type`.
+- Vocab learning is stored in the same PostgreSQL database (vocabulary table).
 
 ---
 
@@ -381,32 +397,7 @@ VELUM_PORT=3000 VELUM_AI_API_KEY=gsk_xxx go run cmd/velum/main.go
 
 ---
 
-## 📁 Project Structure
 
-```
-velum/
-├── cmd/velum/main.go           # Entry point
-├── config.yaml                 # Your configuration
-├── example.config.yaml         # Template with all options
-├── data/                       # Auto-created databases
-│   ├── velum.db               # Event storage
-│   └── velum_vocab.db         # Vocabulary storage
-└── internal/
-    ├── api/                    # HTTP server
-    ├── config/                 # Config loading
-    ├── layers/                 # Processing pipeline
-    │   ├── datamapper/        # Event format transformation
-    │   ├── eventadapter/      # Event normalization
-    │   ├── sessionflow/       # Session reconstruction
-    │   ├── behavior/          # Behavior detection
-    │   ├── pattern/           # Pattern aggregation
-    │   ├── baseline/          # Historical comparison
-    │   ├── ai/                # AI analysis
-    │   └── vocabagent/        # AI vocabulary
-    └── storage/               # SQLite persistence
-```
-
----
 
 ## 🧪 Testing
 
@@ -448,7 +439,7 @@ lsof -ti:8080 | xargs kill -9
 2. **Enable vocab_agent** — Auto-classify new words
 3. **Inspect vocabulary database:**
    ```bash
-   sqlite3 ./data/velum_vocab.db "SELECT * FROM vocabulary LIMIT 10"
+   psql -d velum -c "SELECT * FROM vocabulary LIMIT 10;"
    ```
 
 ### Data mapping not working

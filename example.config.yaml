@@ -33,7 +33,18 @@ cors:
 
 # Storage configuration
 storage:
+  type: "postgres"            # Storage backend: "postgres"
   retention_days: 90          # How long to keep historical data (days)
+  
+  # PostgreSQL configuration
+  postgres:
+    host: "localhost"                   # REQUIRED: Database host (IP or hostname)
+    database: "velum"                   # REQUIRED: Database name
+    user: "velum_user"                  # REQUIRED: Database username
+    password: "your_password"           # REQUIRED: Direct password OR use ${DATABASE_PASSWORD} for env var
+    port: 5432                          # Optional: Database port (default: 5432)
+    ssl_mode: "require"                 # Optional: require, disable, prefer (default: prefer)
+    max_connections: 25                 # Optional: Connection pool size (default: 25)
 
 # Baseline detection configuration
 baseline:
@@ -77,6 +88,7 @@ vocab_agent:
   # Enable or disable vocab agent for dynamic vocabulary expansion
   # When enabled, unknown words in events are classified by AI instead of marked as "uncategorized"
   enabled: false
+  # Learned vocabulary is stored in the configured PostgreSQL database (vocabulary table)
   
   # AI provider: "groq" (more providers coming soon)
   provider: "groq"

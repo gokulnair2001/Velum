@@ -56,7 +56,7 @@ func (p *ProcessedEvent) MarshalJSON() ([]byte, error) {
 // EventAdapter is the first layer - cleans raw events into consumable data
 type EventAdapter struct {
 	vocab       *Vocabulary
-	vocabLookup VocabLookup // Optional external vocab lookup (e.g., SQLite)
+	vocabLookup VocabLookup // Optional external vocab lookup (e.g., PostgreSQL)
 }
 
 // New creates a new EventAdapter with default vocabulary
@@ -184,7 +184,7 @@ func (e *EventAdapter) NormalizeEventString(eventStr string) *NormalizedEvent {
 	for _, token := range tokens {
 		lower := strings.ToLower(token)
 
-		// Skip noise words
+		// Skip noise words (kept in memory as a simple filter)
 		if e.vocab.Noise[lower] {
 			continue
 		}
@@ -195,32 +195,11 @@ func (e *EventAdapter) NormalizeEventString(eventStr string) *NormalizedEvent {
 		}
 		seen[lower] = true
 
-		// Categorize the token
+		// Use SQLite as the single source of truth for all vocabulary
+		// (built-in vocabulary is seeded to SQLite at startup)
 		categorized := false
 
-		if norm, ok := e.vocab.Status[lower]; ok {
-			if !contains(normalized.Status, norm) {
-				normalized.Status = append(normalized.Status, norm)
-			}
-			categorized = true
-		}
-
-		if norm, ok := e.vocab.Surface[lower]; ok {
-			if !contains(normalized.Surface, norm) {
-				normalized.Surface = append(normalized.Surface, norm)
-			}
-			categorized = true
-		}
-
-		if norm, ok := e.vocab.Flow[lower]; ok {
-			if !contains(normalized.Flow, norm) {
-				normalized.Flow = append(normalized.Flow, norm)
-			}
-			categorized = true
-		}
-
-		// If still not categorized, try external vocabulary lookup (SQLite)
-		if !categorized && e.vocabLookup != nil {
+		if e.vocabLookup != nil {
 			if category, err := e.vocabLookup.LookupWord(context.Background(), lower); err == nil && category != "" {
 				switch category {
 				case "status":
@@ -239,6 +218,24 @@ func (e *EventAdapter) NormalizeEventString(eventStr string) *NormalizedEvent {
 					}
 					categorized = true
 				}
+			}
+		} else {
+			// Fallback to static vocabulary if SQLite not configured (backward compatibility)
+			if norm, ok := e.vocab.Status[lower]; ok {
+				if !contains(normalized.Status, norm) {
+					normalized.Status = append(normalized.Status, norm)
+				}
+				categorized = true
+			} else if norm, ok := e.vocab.Surface[lower]; ok {
+				if !contains(normalized.Surface, norm) {
+					normalized.Surface = append(normalized.Surface, norm)
+				}
+				categorized = true
+			} else if norm, ok := e.vocab.Flow[lower]; ok {
+				if !contains(normalized.Flow, norm) {
+					normalized.Flow = append(normalized.Flow, norm)
+				}
+				categorized = true
 			}
 		}
 
@@ -282,7 +279,7 @@ func (e *EventAdapter) tokenize(s string) []string {
 // splitCamelCase inserts spaces before uppercase letters in camelCase strings
 func splitCamelCase(s string) string {
 	var result strings.Builder
-	
+
 	for i, r := range s {
 		if i > 0 && unicode.IsUpper(r) {
 			prev := rune(s[i-1])
