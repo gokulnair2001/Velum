@@ -33,7 +33,18 @@ cors:
 
 # Storage configuration
 storage:
+  type: "postgres"            # Storage backend: "postgres"
   retention_days: 90          # How long to keep historical data (days)
+  
+  # PostgreSQL configuration
+  postgres:
+    host: "localhost"                   # REQUIRED: Database host (IP or hostname)
+    database: "velum"                   # REQUIRED: Database name
+    user: "velum_user"                  # REQUIRED: Database username
+    password: "your_password"           # REQUIRED: Direct password OR use ${DATABASE_PASSWORD} for env var
+    port: 5432                          # Optional: Database port (default: 5432)
+    ssl_mode: "require"                 # Optional: require, disable, prefer (default: prefer)
+    max_connections: 25                 # Optional: Connection pool size (default: 25)
 
 # Baseline detection configuration
 baseline:
@@ -77,6 +88,7 @@ vocab_agent:
   # Enable or disable vocab agent for dynamic vocabulary expansion
   # When enabled, unknown words in events are classified by AI instead of marked as "uncategorized"
   enabled: false
+  # Learned vocabulary is stored in the configured PostgreSQL database (vocabulary table)
   
   # AI provider: "groq" (more providers coming soon)
   provider: "groq"
@@ -111,3 +123,36 @@ security:
   #   Or use: printf "your-secret-key" | shasum -a 256
   # Example: For key "my-secret-key", you would store the SHA256 hash here
   api_key_hash: ""
+
+# Data Mapping configuration (transforms raw events to standardized format)
+# Use this to map fields from your raw event schema to Velum's expected format
+data_mapping:
+  # Enable or disable declarative data mapping
+  # When enabled, raw events are transformed before processing
+  enabled: false
+  
+  # Field mappings: define how to extract each field from raw events
+  # Each field can have:
+  #   - paths: list of fallback paths to try (e.g., "payload.event.action")
+  #   - format: timestamp format (epoch_ms, epoch_s, iso8601)
+  #   - required: if true, error when all paths fail; if false, field is omitted
+  mapping:
+    # Mandatory fields (required: true)
+    id:
+      paths: ["data.id", "payload.id", "meta.id"]
+      required: true
+    ts:
+      paths: ["meta.time", "timestamp", "created_at"]
+      format: "epoch_ms"    # Options: epoch_ms, epoch_s, iso8601
+      required: true
+    event:
+      paths: ["payload.event.action", "event_name", "action"]
+      required: true
+    user_id:
+      paths: ["context.user.id", "actor.user_id", "user_id"]
+      required: true
+    
+    # Optional fields (required: false - omitted if not found)
+    session_id:
+      paths: ["context.session.id", "session_id"]
+      required: false

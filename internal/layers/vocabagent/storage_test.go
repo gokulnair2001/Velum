@@ -2,29 +2,11 @@ package vocabagent
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"testing"
 )
 
-func TestSQLiteVocabStorage(t *testing.T) {
-	// Create temp directory for test database
-	tmpDir, err := os.MkdirTemp("", "vocabagent_test")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	dbPath := filepath.Join(tmpDir, "test_vocab.db")
-
-	config := &SQLiteVocabConfig{
-		DBPath: dbPath,
-	}
-
-	storage, err := NewSQLiteVocabStorage(config)
-	if err != nil {
-		t.Fatalf("Failed to create storage: %v", err)
-	}
+func TestInMemoryVocabStorage(t *testing.T) {
+	storage := NewInMemoryVocabStorage()
 	defer storage.Close()
 
 	ctx := context.Background()
@@ -204,8 +186,8 @@ func TestSQLiteVocabStorage(t *testing.T) {
 			t.Fatalf("Failed to get stats: %v", err)
 		}
 
-		if stats["storage_type"] != "sqlite" {
-			t.Errorf("Expected storage_type 'sqlite', got '%v'", stats["storage_type"])
+		if stats["storage_type"] != "in_memory" {
+			t.Errorf("Expected storage_type 'in_memory', got '%v'", stats["storage_type"])
 		}
 
 		if _, ok := stats["total_entries"]; !ok {
@@ -220,14 +202,6 @@ func TestSQLiteVocabStorage(t *testing.T) {
 			t.Error("Expected by_source in stats")
 		}
 	})
-}
-
-func TestDefaultSQLiteVocabConfig(t *testing.T) {
-	config := DefaultSQLiteVocabConfig()
-
-	if config.DBPath != "./data/velum_vocab.db" {
-		t.Errorf("Expected default path './data/velum_vocab.db', got '%s'", config.DBPath)
-	}
 }
 
 func TestVocabCategory(t *testing.T) {
@@ -261,29 +235,13 @@ func TestVocabData(t *testing.T) {
 }
 
 func TestSeedBuiltinVocabulary(t *testing.T) {
-	// Create temp directory for test database
-	tmpDir, err := os.MkdirTemp("", "vocabagent_seed_test")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	dbPath := filepath.Join(tmpDir, "test_seed_vocab.db")
-
-	config := &SQLiteVocabConfig{
-		DBPath: dbPath,
-	}
-
-	storage, err := NewSQLiteVocabStorage(config)
-	if err != nil {
-		t.Fatalf("Failed to create storage: %v", err)
-	}
+	storage := NewInMemoryVocabStorage()
 	defer storage.Close()
 
 	ctx := context.Background()
 
-	// First seed should populate the database
-	err = SeedBuiltinVocabulary(ctx, storage)
+	// First seed should populate the storage
+	err := SeedBuiltinVocabulary(ctx, storage)
 	if err != nil {
 		t.Fatalf("First seed failed: %v", err)
 	}

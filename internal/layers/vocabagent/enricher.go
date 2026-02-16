@@ -65,10 +65,6 @@ func (v *VocabEnricher) Process(input interface{}) (interface{}, error) {
 		return input, nil
 	}
 
-	if v.debug {
-		fmt.Printf("[DEBUG] [VocabEnricher] Extracted %d unique tokens\n", len(tokens))
-	}
-
 	// Find tokens that are NOT in the vocab storage
 	unknownTokens, err := v.findUnknownTokens(ctx, tokens)
 	if err != nil {
@@ -85,8 +81,6 @@ func (v *VocabEnricher) Process(input interface{}) (interface{}, error) {
 		}
 		return input, nil
 	}
-
-	fmt.Printf("[VocabEnricher] Found %d unknown words, sending to AI for classification: %v\n", len(unknownTokens), unknownTokens)
 
 	// Call VocabAgent to classify unknown tokens
 	result, err := v.agent.ClassifyWords(unknownTokens)
@@ -112,16 +106,7 @@ func (v *VocabEnricher) Process(input interface{}) (interface{}, error) {
 				fmt.Printf("[DEBUG] [VocabEnricher] Failed to store classified words: %v\n", err)
 			}
 		} else if storedCount > 0 {
-			fmt.Printf("[VocabEnricher] Stored %d new vocabulary entries from AI classification:\n", storedCount)
-			if len(result.Classified.Status) > 0 {
-				fmt.Printf("  - Status: %v\n", result.Classified.Status)
-			}
-			if len(result.Classified.Surface) > 0 {
-				fmt.Printf("  - Surface: %v\n", result.Classified.Surface)
-			}
-			if len(result.Classified.Flow) > 0 {
-				fmt.Printf("  - Flow: %v\n", result.Classified.Flow)
-			}
+			fmt.Printf("Vocab: Learned and stored %d new words from AI\n", storedCount)
 		}
 	}
 

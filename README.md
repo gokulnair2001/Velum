@@ -1,309 +1,461 @@
 # Velum
 
-**Behavioral Infrastructure Layer for Analytics Data**
+### Transform Analytics Events into Behavioral Intelligence
 
-Velum sits on top of your analytics event data and extracts behavioral insights. It transforms analytical/metric-focused data into behavioral/story-rich insights, shifting the focus from "why did this error occur?" to "why is there a gap in user behavior?"
+Velum is a behavioral infrastructure layer that sits between your raw analytics data and your decision-making systems. It automatically detects patterns like user hesitation, retry storms, silent abandonments, and confused navigation — insights that traditional metrics dashboards completely miss.
+
+**Stop asking "what happened?" and start understanding "why users behave this way."**
 
 ---
 
-## Getting Started
+## Why Velum?
 
-### Prerequisites
-- Go 1.21 or higher
+Traditional analytics tells you *what* happened:
+- 500 button clicks
+- 12% drop-off rate
+- 3.2s average load time
 
-### Installation
+Velum tells you *why* it matters:
+- "Users are hesitating before checkout — 40% pause for 5+ seconds"
+- "Retry storm detected in payment flow — users clicking submit 3+ times"
+- "Silent abandonment pattern — users scroll but never interact"
+
+---
+
+## 🚀 5-Minute Quick Start
+
+### Step 1: Install
+
 ```bash
+git clone https://github.com/your-org/velum.git
+cd velum
 go mod tidy
 ```
 
-### Running the Server
+### Step 2: Configure
+
+```bash
+cp example.config.yaml config.yaml
+```
+
+**Minimal config for local testing** (edit `config.yaml`):
+```yaml
+server:
+  port: "8080"
+
+security:
+  enabled: false  # Disable auth for quick testing
+```
+
+### Step 3: Run
+
 ```bash
 go run cmd/velum/main.go
 ```
 
-The server starts on port `8080` by default. Configure with environment variables:
-- `VELUM_PORT` - Server port (default: `8080`)
-- `VELUM_ENV` - Environment (default: `development`)
-
----
-
-## API Endpoints
-
-### Health Check
-```
-GET /health
-```
-
-**Response:**
-```json
-{
-  "status": "healthy",
-  "service": "velum"
-}
-```
-
-### Analyze Events
-```
-POST /api/v1/analyze
-```
-
-Processes raw analytics events through Velum's behavioral layers.
-
----
-
-## Raw Event Format
-
-Velum expects events in JSON format with the following structure:
-
-### Required Fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `event` | `string` | The event name/identifier to be normalized |
-| `id` | `string` | Unique event identifier |
-| `ts` | `string` (ISO 8601) | Timestamp of the event |
-
-> **Note:** Events missing `id` or `ts` fields will be skipped and excluded from processing.
-
-### Recommended Fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `session_id` | `string` | Session identifier |
-
-> **💡 Tip:** Including `session_id` with each event enables stronger behavioral analysis. Session data allows Velum to group events into user journeys, detect patterns across interactions, and identify behavioral gaps within a single session context.
-
-### Optional Fields
-
-All other fields are passed through unchanged. Common fields include:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `user_id` | `string` or `number` | User identifier |
-| `properties` | `object` | Additional event properties |
-
-### Event Naming Conventions
-
-Velum's event adapter can parse events in multiple formats:
-
-| Format | Example |
-|--------|---------|
-| Snake case | `button_click_success` |
-| Kebab case | `home-page-view` |
-| Camel case | `userLoginSuccess` |
-| Dot notation | `checkout.payment.failed` |
-
----
-
-## Request Example
+### Step 4: Test
 
 ```bash
+# Health check
+curl http://localhost:8080/health
+
+# Send test events
 curl -X POST http://localhost:8080/api/v1/analyze \
   -H "Content-Type: application/json" \
   -d '{
     "events": [
-      {
-        "event": "checkout_payment_click",
-        "id": "evt_123",
-        "user_id": 222,
-        "ts": "2026-02-04T10:12:01Z",
-        "session_id": "sess_abc",
-        "properties": {
-          "amount": 99.99,
-          "currency": "USD"
-        }
-      },
-      {
-        "event": "login_modal_view",
-        "id": "evt_124",
-        "user_id": 222,
-        "ts": "2026-02-04T10:12:05Z"
-      }
+      {"id": "1", "event": "checkout_page_view", "ts": 1707500000000},
+      {"id": "2", "event": "checkout_scroll", "ts": 1707500015000},
+      {"id": "3", "event": "checkout_abandoned", "ts": 1707500045000}
     ]
   }'
 ```
 
+🎉 **That's it!** You should see behavioral analysis detecting a silent abandonment pattern.
+
 ---
 
-## Response Example
+## 📋 Choose Your Setup
 
-```json
-{
-  "success": true,
-  "message": "Behavioral analysis complete",
-  "data": {
-    "events_received": 2,
-    "layers_processed": ["event_adapter"],
-    "normalized_events": [
-      {
-        "event": "checkout_payment_click",
-        "id": "evt_123",
-        "user_id": 222,
-        "ts": "2026-02-04T10:12:01Z",
-        "session_id": "sess_abc",
-        "properties": {
-          "amount": 99.99,
-          "currency": "USD"
-        },
-        "normalized": {
-          "original": "checkout_payment_click",
-          "tokens": ["checkout", "payment", "click"],
-          "status": ["click"],
-          "surface": ["checkout"],
-          "flow": ["payment"]
-        }
-      },
-      {
-        "event": "login_modal_view",
-        "id": "evt_124",
-        "user_id": 222,
-        "ts": "2026-02-04T10:12:05Z",
-        "normalized": {
-          "original": "login_modal_view",
-          "tokens": ["login", "modal", "view"],
-          "status": ["view"],
-          "surface": ["modal", "view"],
-          "flow": ["authentication"]
-        }
-      }
-    ]
-  }
-}
+| Scenario | Security | AI Features | Data Mapping |
+|----------|----------|-------------|--------------|
+| **Local Development** | `enabled: false` | Optional | Optional |
+| **Internal API** | `enabled: true` | Recommended | As needed |
+| **Production** | `enabled: true` | Recommended | Recommended |
+
+---
+
+## 🔧 Configuration Guide
+
+Velum is configured via `config.yaml`. Here's everything you need to know:
+
+### Security (API Authentication)
+
+```yaml
+security:
+  enabled: true
+  api_key_hash: "your-sha256-hash"
+```
+
+**Generate your API key hash:**
+```bash
+# Choose a secret key (keep this safe!)
+echo -n "my-secret-api-key" | shasum -a 256
+# Output: e57de863c9fb355e971216e8e5ccb6ca3c63a51d4a017ac55f15f23e78f4e92c
+
+# Use this hash in config.yaml, then include the original key in requests:
+curl -H "X-Infra-Key: my-secret-api-key" http://localhost:8080/api/v1/analyze
+```
+
+**To disable auth** (local dev only):
+```yaml
+security:
+  enabled: false
 ```
 
 ---
 
-## Normalized Event Structure
+### Data Mapping (Transform Your Event Format)
 
-The `normalized` object contains:
+If your events don't match Velum's expected format, use data mapping to transform them:
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `original` | `string` | The original event string |
-| `tokens` | `string[]` | Individual tokens extracted from the event |
-| `status` | `string[]` | Event states (e.g., `click`, `view`, `success`, `failed`) |
-| `surface` | `string[]` | UI locations (e.g., `modal`, `checkout`, `sidebar`) |
-| `flow` | `string[]` | User intents (e.g., `authentication`, `payment`, `creation`) |
-| `uncategorized` | `string[]` | Tokens not matching any vocabulary category |
+**Expected format:**
+```json
+{"id": "...", "event": "...", "ts": 1234567890, "user_id": "...", "session_id": "..."}
+```
+
+**Your format might be:**
+```json
+{
+  "data": {"id": "evt-123"},
+  "meta": {"time": 1707500000000},
+  "payload": {"event": {"action": "button_click"}},
+  "context": {"user": {"id": "usr-456"}}
+}
+```
+
+**Solution — Enable data mapping:**
+```yaml
+data_mapping:
+  enabled: true
+  mapping:
+    id:
+      paths: ["data.id", "payload.id", "meta.id"]  # Try each path in order
+      required: true                                # Error if all paths fail
+    ts:
+      paths: ["meta.time", "timestamp", "created_at"]
+      format: "epoch_ms"  # Options: epoch_ms, epoch_s, iso8601
+      required: true
+    event:
+      paths: ["payload.event.action", "event_name", "action"]
+      required: true
+    user_id:
+      paths: ["context.user.id", "actor.user_id", "user_id"]
+      required: false  # Optional - anonymous users allowed
+    session_id:
+      paths: ["context.session.id", "session_id"]
+      required: false
+```
+
+**Key concepts:**
+- **paths**: Fallback paths tried in order (dot notation for nested fields)
+- **required**: `true` = error if missing, `false` = field omitted if missing
+- **format**: Timestamp conversion (`epoch_ms`, `epoch_s`, `iso8601` → all convert to epoch_ms)
 
 ---
 
-## Flow Instance Structure
+### AI Features (Optional but Powerful)
 
-After Layer 2 processing, events are grouped into flow instances:
+Velum has two AI-powered features. Both require a [Groq API key](https://console.groq.com/keys) (free tier available).
 
+#### Vocab Agent — Auto-classify Unknown Words
+
+When Velum encounters unknown tokens in your events (like `promo_banner_click`), it can automatically classify them:
+
+```yaml
+vocab_agent:
+  enabled: true
+  provider: "groq"
+  api_key: "gsk_your_api_key_here"  # Or set VELUM_VOCAB_AGENT_API_KEY env var
+  model: "llama-3.1-8b-instant"
+```
+
+#### AI Analyzer — Natural Language Summaries
+
+Get human-readable explanations of detected patterns:
+
+```yaml
+ai_analyzer:
+  enabled: true
+  provider: "groq"
+  api_key: "gsk_your_api_key_here"  # Or set VELUM_AI_API_KEY env var
+  model: "llama-3.1-8b-instant"
+```
+
+---
+
+### Server Settings
+
+```yaml
+server:
+  port: "8080"              # Port to listen on
+  host: "0.0.0.0"           # 0.0.0.0 = all interfaces, 127.0.0.1 = localhost only
+  environment: "development" # development, staging, production
+  
+  # Timeouts (prevent hanging connections)
+  read_timeout: "10s"
+  write_timeout: "30s"
+  idle_timeout: "60s"
+  shutdown_timeout: "15s"   # Graceful shutdown wait time
+```
+
+### CORS (Cross-Origin Requests)
+
+```yaml
+cors:
+  allowed_origins: ["*"]                    # Use specific domains in production
+  allowed_methods: ["GET", "POST"]
+  allowed_headers: ["Content-Type", "Authorization"]
+```
+
+### Baseline Detection
+
+Track patterns over time and detect anomalies:
+
+```yaml
+baseline:
+  window_days: 28              # Historical window for baseline
+  min_days: 7                  # Minimum data before computing baseline
+  computation_mode: "daily"    # "daily" (cached) or "always" (real-time)
+  trend_threshold: 0.10        # 10% change = significant trend
+  high_significance_threshold: 0.15
+  std_deviation_multiplier: 2.0
+```
+
+### Resiliency (Rate Limits & Circuit Breaker)
+
+Protect against overload and cascading AI failures:
+
+```yaml
+resiliency:
+  rate_limit_requests: 100  # Max requests per second
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 5    # Open circuit after 5 AI failures
+    reset_timeout: "30s"    # Retry AI after 30s
+```
+
+### Storage
+
+```yaml
+storage:
+  type: "postgres"      # Storage backend: "postgres"
+  retention_days: 90    # Auto-delete pattern snapshots older than this
+
+  # PostgreSQL configuration
+  postgres:
+    host: "localhost"
+    port: 5432
+    database: "velum"
+    user: "velum_user"
+    password: "your_password"
+    ssl_mode: "prefer"        # prefer, require, disable
+    max_connections: 25
+```
+
+**What gets stored**
+- Pattern snapshots and baseline history (not raw events).
+- Storage backend is selected by `storage.type`.
+- Vocab learning is stored in the same PostgreSQL database (vocabulary table).
+
+---
+
+## 📡 API Reference
+
+### Authentication
+
+When `security.enabled: true`, include your API key:
+```bash
+curl -H "X-Infra-Key: your-api-key" http://localhost:8080/api/v1/analyze
+```
+
+### Endpoints
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `/health` | ❌ | Health check |
+| POST | `/api/v1/analyze` | ✅ | Analyze events |
+
+### Event Format
+
+**Without data mapping:**
 ```json
 {
-  "flow_instance_id": "flow_1738749600000000000_1",
-  "user_id": "222",
-  "flow": "payment",
-  "context_type": "explicit_session",
-  "confidence": "high",
-  "start_time": "2026-02-04T10:00:00Z",
-  "end_time": "2026-02-04T10:02:00Z",
-  "is_complete": true,
   "events": [
     {
-      "timestamp": "2026-02-04T10:00:00Z",
-      "surface": "checkout",
-      "status": "view",
-      "raw_event_name": "checkout_view",
-      "session_id": "sess_abc"
-    },
-    {
-      "timestamp": "2026-02-04T10:01:00Z",
-      "surface": "button",
-      "status": "click",
-      "raw_event_name": "payment_click",
-      "session_id": "sess_abc"
-    },
-    {
-      "timestamp": "2026-02-04T10:02:00Z",
-      "surface": "modal",
-      "status": "success",
-      "raw_event_name": "payment_success",
-      "session_id": "sess_abc"
+      "id": "evt-001",
+      "event": "checkout_payment_click",
+      "ts": 1707500000000,
+      "user_id": "usr-123",
+      "session_id": "sess-abc"
     }
   ]
 }
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `flow_instance_id` | `string` | Unique identifier for this flow attempt |
-| `user_id` | `string` | User who performed this flow |
-| `flow` | `string` | Flow type (e.g., `payment`, `authentication`) |
-| `context_type` | `string` | `explicit_session` if all events share session_id, otherwise `windowed` |
-| `confidence` | `string` | `high`, `medium`, or `low` based on context completeness |
-| `is_complete` | `boolean` | Whether the flow ended with success |
-| `events` | `array` | Ordered list of events in this flow instance |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | string | ✅ | Unique event ID |
+| `event` | string | ✅ | Event name |
+| `ts` | number/string | ✅ | Timestamp (epoch ms or ISO 8601) |
+| `user_id` | string | Recommended | User identifier |
+| `session_id` | string | Optional | Session identifier |
 
-### Flow Reconstruction Rules
+**With data mapping enabled:** Send events in your own format — Velum transforms them automatically.
 
-- **Grouping:** Events are grouped by `user_id` - events from different users are never mixed
-- **Ordering:** Events are sorted strictly by timestamp within each user
-- **Flow Start:** A new flow instance starts when a `view` or `start` status is seen
-- **Flow End:** A flow instance ends on `success`, `dismiss`, or timeout (default: 30 minutes)
-- **Multiple Instances:** The same user can have multiple instances of the same flow
-- **No Inference:** The layer does NOT infer behavior (retries, hesitation, abandonment)
+### Event Naming Conventions
 
----
+Velum parses multiple formats:
 
-## Vocabulary Categories
-
-### Status Keywords
-Words denoting the result or state of an event:
-- **Success states:** `success`, `complete`, `done`, `ok`
-- **Failure states:** `failed`, `error`
-- **Pending states:** `pending`, `loading`, `processing`
-- **Interaction states:** `click`, `tap`, `press`, `view`, `dismiss`
-
-### Surface Keywords
-Words denoting UI components or locations:
-- **Navigation:** `home`, `nav`, `sidebar`, `header`, `footer`
-- **Commerce:** `checkout`, `cart`, `product`, `catalog`
-- **Components:** `modal`, `button`, `form`, `input`, `dropdown`, `card`
-- **Screens:** `dashboard`, `settings`, `profile`, `search`
-
-### Flow Keywords
-Words denoting user intent or actions:
-- **Authentication:** `login`, `logout`, `signin`, `signup`
-- **CRUD:** `create`, `add`, `update`, `edit`, `delete`, `remove`
-- **Commerce:** `payment`, `purchase`, `order`, `refund`
-- **Navigation:** `search`, `filter`, `scroll`, `navigate`
+| Format | Example | Parsed As |
+|--------|---------|-----------|
+| Snake case | `checkout_payment_success` | checkout, payment, success |
+| Kebab case | `home-page-view` | home, page, view |
+| Camel case | `userLoginFailed` | user, login, failed |
+| Dot notation | `cart.item.added` | cart, item, added |
 
 ---
 
-## Project Structure
+## 🔄 How It Works
+
+Velum processes events through a layered pipeline:
 
 ```
-Velum/
-├── cmd/
-│   └── velum/
-│       └── main.go              # Application entry point
-├── internal/
-│   ├── api/
-│   │   ├── server.go            # HTTP server & routing
-│   │   └── handlers/
-│   │       └── handler.go       # Request handlers
-│   ├── config/
-│   │   └── config.go            # Configuration management
-│   └── layers/
-│       ├── layer.go             # Layer interface & pipeline
-│       ├── eventadapter/        # Layer 1: Event normalization
-│       │   ├── adapter.go
-│       │   ├── vocabulary.go
-│       │   └── adapter_test.go
-│       └── sessionflow/         # Layer 2: Session & Flow Reconstruction
-│           ├── types.go
-│           ├── reconstructor.go
-│           └── reconstructor_test.go
-├── go.mod
-└── README.md
+Raw Events → [Data Mapper] → Event Adapter → Session Flow → Behavior Analyzer → Pattern Detector → Baseline
+```
+
+| Layer | What It Does |
+|-------|--------------|
+| **Data Mapper** | Transforms your event format to Velum's format (optional) |
+| **Event Adapter** | Tokenizes event names → `{status, surface, flow}` |
+| **Session Flow** | Groups events by user/session into journeys |
+| **Behavior Analyzer** | Detects hesitation, retries, abandonment |
+| **Pattern Detector** | Aggregates behaviors into patterns |
+| **Baseline** | Compares against historical data |
+
+### Detected Patterns
+
+| Pattern | Description |
+|---------|-------------|
+| **Retry Storm** | >30% of users retry the same action |
+| **Silent Abandonment** | Users view but never interact |
+| **Confusion Loop** | Repeated navigation without progress |
+| **Early Dropoff** | Users abandon immediately after starting |
+| **Hesitation** | Long pauses before action |
+
+---
+
+## 🔤 Vocabulary System
+
+Velum classifies event tokens into three categories:
+
+| Category | Examples | What It Represents |
+|----------|----------|-------------------|
+| **Status** | click, success, failed, error, pending | What happened |
+| **Surface** | button, modal, sidebar, checkout, cart | Where it happened |
+| **Flow** | payment, auth, registration, search | User intent |
+
+**Example:** `checkout_payment_failed` → `{surface: checkout, flow: payment, status: failed}`
+
+### Handling Unknown Words
+
+By default, unknown words go to "uncategorized". Enable `vocab_agent` for AI classification:
+
+```yaml
+vocab_agent:
+  enabled: true
+  api_key: "your-groq-api-key"
 ```
 
 ---
 
-## License
+## 🌍 Environment Variables
+
+Override config values with environment variables:
+
+| Variable | Overrides | Description |
+|----------|-----------|-------------|
+| `VELUM_PORT` | `server.port` | Server port |
+| `VELUM_ENV` | `server.environment` | Environment mode |
+| `VELUM_AI_API_KEY` | `ai_analyzer.api_key` | AI analyzer API key |
+| `VELUM_VOCAB_AGENT_API_KEY` | `vocab_agent.api_key` | Vocab agent API key |
+
+```bash
+# Example: Run with custom port and AI key
+VELUM_PORT=3000 VELUM_AI_API_KEY=gsk_xxx go run cmd/velum/main.go
+```
+
+---
+
+
+
+## 🧪 Testing
+
+```bash
+# Run all tests
+go test ./...
+
+# Verbose output
+go test ./... -v
+
+# Specific package
+go test ./internal/layers/datamapper/... -v
+
+# With coverage
+go test ./... -cover
+```
+
+---
+
+## 🔧 Troubleshooting
+
+### "Invalid API key" error
+
+```bash
+# Regenerate and verify your hash (no trailing newline!)
+printf "your-key" | shasum -a 256
+```
+
+### "Address already in use"
+
+```bash
+# Kill process on port 8080
+lsof -ti:8080 | xargs kill -9
+```
+
+### Events showing empty/unknown flow
+
+1. **Check event naming** — Use descriptive names like `checkout_payment_click`
+2. **Enable vocab_agent** — Auto-classify new words
+3. **Inspect vocabulary database:**
+   ```bash
+   psql -d velum -c "SELECT * FROM vocabulary LIMIT 10;"
+   ```
+
+### Data mapping not working
+
+1. Ensure `data_mapping.enabled: true`
+2. Check paths use dot notation: `context.user.id` not `context/user/id`
+3. Verify required fields have valid fallback paths
+
+### AI features not responding
+
+1. Verify API key is valid at [console.groq.com](https://console.groq.com)
+2. Check circuit breaker isn't open (wait 30s after failures)
+3. Review logs for rate limiting errors
+
+---
+
+## 📄 License
 
 MIT

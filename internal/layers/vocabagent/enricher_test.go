@@ -2,8 +2,6 @@ package vocabagent
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"testing"
 )
 
@@ -39,16 +37,8 @@ func TestVocabEnricherDisabledWithoutStorage(t *testing.T) {
 }
 
 func TestVocabEnricherDisabledWithoutAgent(t *testing.T) {
-	// Create temp storage
-	tmpDir, err := os.MkdirTemp("", "enricher_test")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	storage, _ := NewSQLiteVocabStorage(&SQLiteVocabConfig{
-		DBPath: filepath.Join(tmpDir, "test.db"),
-	})
+	// Create in-memory storage
+	storage := NewInMemoryVocabStorage()
 	defer storage.Close()
 
 	enricher := NewVocabEnricher(storage, nil, false)
@@ -163,19 +153,8 @@ func TestVocabEnricherExtractTokens(t *testing.T) {
 }
 
 func TestVocabEnricherFindUnknownTokens(t *testing.T) {
-	// Create temp storage with some known vocab
-	tmpDir, err := os.MkdirTemp("", "enricher_unknown_test")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	storage, err := NewSQLiteVocabStorage(&SQLiteVocabConfig{
-		DBPath: filepath.Join(tmpDir, "test.db"),
-	})
-	if err != nil {
-		t.Fatalf("Failed to create storage: %v", err)
-	}
+	// Create in-memory storage with some known vocab
+	storage := NewInMemoryVocabStorage()
 	defer storage.Close()
 
 	ctx := context.Background()
@@ -206,19 +185,8 @@ func TestVocabEnricherFindUnknownTokens(t *testing.T) {
 }
 
 func TestVocabEnricherStoreClassifiedWords(t *testing.T) {
-	// Create temp storage
-	tmpDir, err := os.MkdirTemp("", "enricher_store_test")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	storage, err := NewSQLiteVocabStorage(&SQLiteVocabConfig{
-		DBPath: filepath.Join(tmpDir, "test.db"),
-	})
-	if err != nil {
-		t.Fatalf("Failed to create storage: %v", err)
-	}
+	// Create in-memory storage
+	storage := NewInMemoryVocabStorage()
 	defer storage.Close()
 
 	ctx := context.Background()

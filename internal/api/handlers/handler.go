@@ -23,31 +23,42 @@ import (
 type Handler struct {
 	pipeline     *layers.Pipeline
 	storage      storage.Storage
-	vocabStorage *vocabagent.SQLiteVocabStorage
+	vocabStorage *vocabagent.PostgresVocabStorage
 	environment  string
 }
 
 // NewHandler creates a new handler instance with the provided configuration
 func NewHandler(cfg *config.Config) *Handler {
-	// Initialize SQLite storage with retention config
-	storageConfig := &storage.SQLiteConfig{
-		RetentionDays: cfg.Storage.RetentionDays,
-	}
-	sqliteStorage, err := storage.NewSQLiteStorage(storageConfig)
+	// Initialize storage using factory (Postgres based on config)
+	storageInstance, err := storage.NewStorage(&cfg.Storage)
+
 	if err != nil {
-		fmt.Printf("Warning: Failed to initialize SQLite storage, using in-memory: %v\n", err)
-		sqliteStorage = nil
+		fmt.Printf("❌ Storage initialization failed\n")
+		fmt.Printf("   Backend: PostgreSQL\n")
+		fmt.Printf("   Host: %s:%d\n", cfg.Storage.Postgres.Host, cfg.Storage.Postgres.Port)
+		fmt.Printf("   Database: %s\n", cfg.Storage.Postgres.Database)
+		fmt.Printf("   Error: %v\n", err)
+		storageInstance = nil
+	} else {
+		// Log which storage backend is being used
+		fmt.Printf("✅ Storage connection successful\n")
+		fmt.Printf("   Backend: PostgreSQL\n")
+		fmt.Printf("   Host: %s:%d\n", cfg.Storage.Postgres.Host, cfg.Storage.Postgres.Port)
+		fmt.Printf("   Database: %s\n", cfg.Storage.Postgres.Database)
+		fmt.Printf("   User: %s\n", cfg.Storage.Postgres.User)
+		fmt.Printf("   SSL Mode: %s\n", cfg.Storage.Postgres.SSLMode)
+		fmt.Printf("   Max Connections: %d\n", cfg.Storage.Postgres.MaxConnections)
+		fmt.Printf("   Retention: %d days\n", cfg.Storage.RetentionDays)
 	}
 
 	// Start background cleanup goroutine for storage retention
-	if sqliteStorage != nil {
-		go startStorageCleanup(sqliteStorage, cfg.Storage.RetentionDays)
+	if storageInstance != nil {
+		go startStorageCleanup(storageInstance, cfg.Storage.RetentionDays)
 	}
 
-	// Initialize vocabulary storage and seed with built-in vocabulary
-	var vocabStorage *vocabagent.SQLiteVocabStorage
-	vocabStorageConfig := vocabagent.DefaultSQLiteVocabConfig()
-	vocabStorage, err = vocabagent.NewSQLiteVocabStorage(vocabStorageConfig)
+	// Initialize vocabulary storage using the same PostgreSQL database
+	var vocabStorage *vocabagent.PostgresVocabStorage
+	vocabStorage, err = vocabagent.NewPostgresVocabStorage(&cfg.Storage.Postgres)
 	if err != nil {
 		fmt.Printf("Warning: Failed to initialize vocab storage: %v\n", err)
 	} else {
@@ -93,7 +104,7 @@ func NewHandler(cfg *config.Config) *Handler {
 	// Use vocab storage for external lookup if available
 	if vocabStorage != nil {
 		pipeline.Register(eventadapter.NewWithVocabLookup(vocabStorage))
-		fmt.Println("Event Adapter using SQLite vocabulary lookup")
+		fmt.Println("Event Adapter using PostgreSQL vocabulary lookup")
 	} else {
 		pipeline.Register(eventadapter.New())
 	}
@@ -117,8 +128,8 @@ func NewHandler(cfg *config.Config) *Handler {
 		StandardDeviationMultiplier: cfg.Baseline.StdDeviationMultiplier,
 	}
 
-	if sqliteStorage != nil {
-		pipeline.Register(baseline.NewWithConfig(baselineConfig, sqliteStorage))
+	if storageInstance != nil {
+		pipeline.Register(baseline.NewWithConfig(baselineConfig, storageInstance))
 	} else {
 		pipeline.Register(baseline.NewWithConfig(baselineConfig, nil))
 	}
@@ -156,14 +167,14 @@ func NewHandler(cfg *config.Config) *Handler {
 
 	return &Handler{
 		pipeline:     pipeline,
-		storage:      sqliteStorage,
+		storage:      storageInstance,
 		vocabStorage: vocabStorage,
 		environment:  cfg.Server.Environment,
 	}
 }
 
 // startStorageCleanup runs periodic cleanup of old snapshots
-func startStorageCleanup(store *storage.SQLiteStorage, retentionDays int) {
+func startStorageCleanup(store storage.Storage, retentionDays int) {
 	// Run cleanup immediately on startup
 	ctx := context.Background()
 	if deleted, err := store.Cleanup(ctx); err != nil {

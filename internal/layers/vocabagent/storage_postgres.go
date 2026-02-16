@@ -4,48 +4,52 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
-	"path/filepath"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/lib/pq"
+	"github.com/velum/internal/config"
 )
 
-// SQLiteVocabStorage implements VocabStorage interface with SQLite persistence
-type SQLiteVocabStorage struct {
-	db     *sql.DB
-	dbPath string
+// PostgresVocabStorage implements VocabStorage interface with PostgreSQL persistence
+// It stores vocabulary in the same PostgreSQL database used for baseline storage,
+// in a separate "vocabulary" table.
+type PostgresVocabStorage struct {
+	db      *sql.DB
+	connStr string
 }
 
-// SQLiteVocabConfig holds configuration for SQLite vocab storage
-type SQLiteVocabConfig struct {
-	// DBPath is the path to the SQLite database file
-	DBPath string
-}
-
-// DefaultSQLiteVocabConfig returns default SQLite vocab configuration
-func DefaultSQLiteVocabConfig() *SQLiteVocabConfig {
-	return &SQLiteVocabConfig{
-		DBPath: "./data/velum_vocab.db",
-	}
-}
-
-// NewSQLiteVocabStorage creates a new SQLite-backed vocabulary storage
-func NewSQLiteVocabStorage(config *SQLiteVocabConfig) (*SQLiteVocabStorage, error) {
-	if config == nil {
-		config = DefaultSQLiteVocabConfig()
+// NewPostgresVocabStorage creates a new PostgreSQL-backed vocabulary storage.
+// It connects to the same database configured in the main storage config.
+func NewPostgresVocabStorage(cfg *config.PostgresStorageConfig) (*PostgresVocabStorage, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("postgres config is nil")
 	}
 
-	// Ensure directory exists
-	dir := filepath.Dir(config.DBPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create data directory: %w", err)
-	}
+	// Build connection string
+	connStr := fmt.Sprintf(
+		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
+		cfg.Host,
+		cfg.Port,
+		cfg.User,
+		cfg.Password,
+		cfg.Database,
+		cfg.SSLMode,
+	)
 
-	db, err := sql.Open("sqlite3", config.DBPath)
+	// Open database connection
+	db, err := sql.Open("postgres", connStr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
+
+	// Configure connection pool
+	maxConns := cfg.MaxConnections
+	if maxConns == 0 {
+		maxConns = 10
+	}
+	db.SetMaxOpenConns(maxConns)
+	db.SetMaxIdleConns(maxConns / 2)
+	db.SetConnMaxLifetime(time.Hour)
 
 	// Test connection
 	if err := db.Ping(); err != nil {
@@ -53,29 +57,29 @@ func NewSQLiteVocabStorage(config *SQLiteVocabConfig) (*SQLiteVocabStorage, erro
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
-	storage := &SQLiteVocabStorage{
-		db:     db,
-		dbPath: config.DBPath,
+	storage := &PostgresVocabStorage{
+		db:      db,
+		connStr: connStr,
 	}
 
 	// Initialize schema
 	if err := storage.initSchema(); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("failed to initialize schema: %w", err)
+		return nil, fmt.Errorf("failed to initialize vocabulary schema: %w", err)
 	}
 
 	return storage, nil
 }
 
-// initSchema creates the required tables if they don't exist
-func (s *SQLiteVocabStorage) initSchema() error {
+// initSchema creates the vocabulary table if it doesn't exist
+func (s *PostgresVocabStorage) initSchema() error {
 	schema := `
 		CREATE TABLE IF NOT EXISTS vocabulary (
 			word TEXT PRIMARY KEY NOT NULL,
 			category TEXT NOT NULL CHECK(category IN ('status', 'surface', 'flow')),
 			normalized TEXT NOT NULL,
 			source TEXT NOT NULL DEFAULT 'ai',
-			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_vocabulary_category 
@@ -90,15 +94,15 @@ func (s *SQLiteVocabStorage) initSchema() error {
 }
 
 // UpsertVocab stores or updates a vocabulary entry
-func (s *SQLiteVocabStorage) UpsertVocab(ctx context.Context, entry *VocabEntry) error {
+func (s *PostgresVocabStorage) UpsertVocab(ctx context.Context, entry *VocabEntry) error {
 	query := `
 		INSERT INTO vocabulary (word, category, normalized, source, created_at)
-		VALUES (?, ?, ?, ?, ?)
+		VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT(word)
 		DO UPDATE SET
-			category = excluded.category,
-			normalized = excluded.normalized,
-			source = excluded.source
+			category = EXCLUDED.category,
+			normalized = EXCLUDED.normalized,
+			source = EXCLUDED.source
 	`
 
 	createdAt := entry.CreatedAt
@@ -118,7 +122,7 @@ func (s *SQLiteVocabStorage) UpsertVocab(ctx context.Context, entry *VocabEntry)
 }
 
 // UpsertVocabBatch stores multiple vocabulary entries in a single transaction
-func (s *SQLiteVocabStorage) UpsertVocabBatch(ctx context.Context, entries []*VocabEntry) error {
+func (s *PostgresVocabStorage) UpsertVocabBatch(ctx context.Context, entries []*VocabEntry) error {
 	if len(entries) == 0 {
 		return nil
 	}
@@ -131,12 +135,12 @@ func (s *SQLiteVocabStorage) UpsertVocabBatch(ctx context.Context, entries []*Vo
 
 	query := `
 		INSERT INTO vocabulary (word, category, normalized, source, created_at)
-		VALUES (?, ?, ?, ?, ?)
+		VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT(word)
 		DO UPDATE SET
-			category = excluded.category,
-			normalized = excluded.normalized,
-			source = excluded.source
+			category = EXCLUDED.category,
+			normalized = EXCLUDED.normalized,
+			source = EXCLUDED.source
 	`
 
 	stmt, err := tx.PrepareContext(ctx, query)
@@ -163,11 +167,11 @@ func (s *SQLiteVocabStorage) UpsertVocabBatch(ctx context.Context, entries []*Vo
 }
 
 // GetVocab retrieves a specific vocabulary entry by word
-func (s *SQLiteVocabStorage) GetVocab(ctx context.Context, word string) (*VocabEntry, error) {
+func (s *PostgresVocabStorage) GetVocab(ctx context.Context, word string) (*VocabEntry, error) {
 	query := `
 		SELECT word, category, normalized, source, created_at
 		FROM vocabulary
-		WHERE word = ?
+		WHERE word = $1
 	`
 
 	var entry VocabEntry
@@ -190,11 +194,11 @@ func (s *SQLiteVocabStorage) GetVocab(ctx context.Context, word string) (*VocabE
 }
 
 // GetVocabByCategory retrieves all vocabulary entries for a specific category
-func (s *SQLiteVocabStorage) GetVocabByCategory(ctx context.Context, category VocabCategory) ([]*VocabEntry, error) {
+func (s *PostgresVocabStorage) GetVocabByCategory(ctx context.Context, category VocabCategory) ([]*VocabEntry, error) {
 	query := `
 		SELECT word, category, normalized, source, created_at
 		FROM vocabulary
-		WHERE category = ?
+		WHERE category = $1
 		ORDER BY word ASC
 	`
 
@@ -218,7 +222,7 @@ func (s *SQLiteVocabStorage) GetVocabByCategory(ctx context.Context, category Vo
 }
 
 // GetAllVocab retrieves all vocabulary entries
-func (s *SQLiteVocabStorage) GetAllVocab(ctx context.Context) ([]*VocabEntry, error) {
+func (s *PostgresVocabStorage) GetAllVocab(ctx context.Context) ([]*VocabEntry, error) {
 	query := `
 		SELECT word, category, normalized, source, created_at
 		FROM vocabulary
@@ -246,7 +250,7 @@ func (s *SQLiteVocabStorage) GetAllVocab(ctx context.Context) ([]*VocabEntry, er
 
 // GetVocabData retrieves vocabulary grouped by category
 // Returns data in the format: {"status": [...], "surface": [...], "flow": [...]}
-func (s *SQLiteVocabStorage) GetVocabData(ctx context.Context) (*VocabData, error) {
+func (s *PostgresVocabStorage) GetVocabData(ctx context.Context) (*VocabData, error) {
 	query := `
 		SELECT category, normalized
 		FROM vocabulary
@@ -299,22 +303,21 @@ func (s *SQLiteVocabStorage) GetVocabData(ctx context.Context) (*VocabData, erro
 }
 
 // DeleteVocab removes a vocabulary entry
-func (s *SQLiteVocabStorage) DeleteVocab(ctx context.Context, word string) error {
-	query := `DELETE FROM vocabulary WHERE word = ?`
+func (s *PostgresVocabStorage) DeleteVocab(ctx context.Context, word string) error {
+	query := `DELETE FROM vocabulary WHERE word = $1`
 	_, err := s.db.ExecContext(ctx, query, word)
 	return err
 }
 
 // Close closes the database connection
-func (s *SQLiteVocabStorage) Close() error {
+func (s *PostgresVocabStorage) Close() error {
 	return s.db.Close()
 }
 
 // GetVocabStats returns vocabulary storage statistics (implements VocabStats interface)
-func (s *SQLiteVocabStorage) GetVocabStats(ctx context.Context) (map[string]interface{}, error) {
+func (s *PostgresVocabStorage) GetVocabStats(ctx context.Context) (map[string]interface{}, error) {
 	stats := make(map[string]interface{})
-	stats["storage_type"] = "sqlite"
-	stats["db_path"] = s.dbPath
+	stats["storage_type"] = "postgresql"
 
 	// Total vocabulary entries
 	var totalCount int
@@ -365,14 +368,9 @@ func (s *SQLiteVocabStorage) GetVocabStats(ctx context.Context) (map[string]inte
 	return stats, nil
 }
 
-// GetDBPath returns the database file path
-func (s *SQLiteVocabStorage) GetDBPath() string {
-	return s.dbPath
-}
-
 // LookupWord implements the eventadapter.VocabLookup interface.
 // Returns the category for a word, or empty string if not found.
-func (s *SQLiteVocabStorage) LookupWord(ctx context.Context, word string) (string, error) {
+func (s *PostgresVocabStorage) LookupWord(ctx context.Context, word string) (string, error) {
 	entry, err := s.GetVocab(ctx, word)
 	if err != nil {
 		return "", err
