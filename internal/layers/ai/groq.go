@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/velum/internal/layers/baseline"
+	"github.com/velum/internal/layers/behavior"
+	"github.com/velum/internal/layers/pattern"
 )
 
 const (
@@ -20,6 +23,14 @@ You are a product analytics interpretation assistant.
 
 You are given detected behavioral patterns and optional baseline comparison
 results. The input JSON is the ONLY source of truth.
+
+Patterns may include a "context_key" field which describes the specific
+conditions under which the pattern was observed (e.g.,
+"error_code=card_declined,plan_name=premium"). When present, you MUST
+reference the context in your analysis. Context-keyed patterns represent
+baselines that are tracked separately — for example, a retry storm on
+checkout for error_code=card_declined is a different baseline from a retry
+storm caused by error_code=timeout.
 
 Your task is to describe WHAT was observed using ONLY the information
 explicitly present in the input. You must not infer, assume, rename, or
@@ -37,6 +48,11 @@ Data usage
   "unclassified behavior" or omit flow mention entirely.
 - You MUST NOT generalize or rephrase pattern names (e.g., do NOT convert
   "early_dropoff" into "silent abandonment" or similar terms).
+- When context_key is present, you MUST include the context conditions in
+  your analysis (e.g., "retry pattern in payment flow where
+  error_code=card_declined").
+- When multiple context_key variants exist for the same pattern+flow, compare
+  them if baseline data is available.
 
 Metrics & baselines
 - Do NOT invent metrics, percentages, counts, ratios, trends, or baselines.
@@ -72,10 +88,11 @@ Output constraints
 REQUIRED OUTPUT FORMAT:
 
 {
-  "summary": "A single sentence describing the observed pattern(s) using only provided pattern_type and flow values.",
+  "summary": "A single sentence describing the observed pattern(s) using only provided pattern_type, flow, and context_key values.",
   "details": [
     "Detail describing the observation using only fields explicitly present in the input.",
-    "Detail describing baseline availability or comparison status, if applicable."
+    "Detail describing baseline availability or comparison status, if applicable.",
+    "Detail about context conditions when context_key is present."
   ],
   "hypotheses": [
     "Possible explanation phrased cautiously and without asserting cause or diagnosis.",
@@ -151,7 +168,9 @@ func (a *Analyzer) Process(input interface{}) (interface{}, error) {
 			fmt.Println("[DEBUG] [AI] Circuit breaker is open, skipping AI analysis")
 		}
 		return &AIResult{
-			ChangeResults: baselineResult.ChangeResults,
+			ChangeResults:    baselineResult.ChangeResults,
+			DetectedPatterns: baselineResult.DetectedPatterns,
+			AnalyzedFlows:    baselineResult.AnalyzedFlows,
 			AIAnalysis: &AnalysisResponse{
 				Summary:        "AI analysis temporarily unavailable",
 				Details:        []string{"Circuit breaker is open due to repeated failures"},
@@ -171,7 +190,9 @@ func (a *Analyzer) Process(input interface{}) (interface{}, error) {
 		}
 		// On error, return result without AI analysis but with error info
 		return &AIResult{
-			ChangeResults: baselineResult.ChangeResults,
+			ChangeResults:    baselineResult.ChangeResults,
+			DetectedPatterns: baselineResult.DetectedPatterns,
+			AnalyzedFlows:    baselineResult.AnalyzedFlows,
 			AIAnalysis: &AnalysisResponse{
 				Summary:        "AI analysis failed",
 				Details:        []string{fmt.Sprintf("Error: %v", err)},
@@ -190,9 +211,11 @@ func (a *Analyzer) Process(input interface{}) (interface{}, error) {
 	}
 
 	return &AIResult{
-		ChangeResults: baselineResult.ChangeResults,
-		AIAnalysis:    analysis,
-		AIEnabled:     true,
+		ChangeResults:    baselineResult.ChangeResults,
+		DetectedPatterns: baselineResult.DetectedPatterns,
+		AnalyzedFlows:    baselineResult.AnalyzedFlows,
+		AIAnalysis:       analysis,
+		AIEnabled:        true,
 	}, nil
 }
 
@@ -202,9 +225,11 @@ func (a *Analyzer) passThrough(input interface{}) (*AIResult, error) {
 	switch v := input.(type) {
 	case *baseline.BaselineResult:
 		return &AIResult{
-			ChangeResults: v.ChangeResults,
-			AIAnalysis:    nil,
-			AIEnabled:     false,
+			ChangeResults:    v.ChangeResults,
+			DetectedPatterns: v.DetectedPatterns,
+			AnalyzedFlows:    v.AnalyzedFlows,
+			AIAnalysis:       nil,
+			AIEnabled:        false,
 		}, nil
 	default:
 		// For other types, wrap minimally
@@ -299,11 +324,15 @@ func (a *Analyzer) analyze(baselineResult *baseline.BaselineResult) (*AnalysisRe
 	return a.parseAIResponse(content)
 }
 
-// buildUserPrompt creates the prompt with baseline data
+// buildUserPrompt creates the prompt with baseline data, pattern evidence, and context breakdown
 func (a *Analyzer) buildUserPrompt(baselineResult *baseline.BaselineResult) (string, error) {
 	var sb strings.Builder
 
 	sb.WriteString("Please analyze the following behavioral pattern data and provide insights:\n\n")
+
+	// Build lookup maps for pattern evidence and flow context
+	patternEvidence := buildPatternEvidenceMap(baselineResult.DetectedPatterns)
+	contextBreakdown := buildContextBreakdown(baselineResult.AnalyzedFlows)
 
 	// Add change results if present
 	if len(baselineResult.ChangeResults) > 0 {
@@ -313,25 +342,138 @@ func (a *Analyzer) buildUserPrompt(baselineResult *baseline.BaselineResult) (str
 			if change.BaselineStatus == baseline.BaselineStatusFirstObservation {
 				// First observation: only send minimal data without baseline metrics
 				sb.WriteString(fmt.Sprintf("- Pattern: %s, Flow: %s\n", change.PatternType, change.Flow))
-				sb.WriteString("  Baseline Available: false\n\n")
+				if change.ContextKey != "" {
+					sb.WriteString(fmt.Sprintf("  Context: %s\n", change.ContextKey))
+				}
+				sb.WriteString("  Baseline Available: false\n")
 			} else {
 				// Baseline exists: send full data with comparison metrics
 				sb.WriteString(fmt.Sprintf("- Pattern: %s, Flow: %s\n", change.PatternType, change.Flow))
+				if change.ContextKey != "" {
+					sb.WriteString(fmt.Sprintf("  Context: %s\n", change.ContextKey))
+				}
 				sb.WriteString(fmt.Sprintf("  Current Impact: %.2f%%, Baseline: %.2f%%\n",
 					change.CurrentImpactRatio*100, change.BaselineImpactRatio*100))
 				sb.WriteString(fmt.Sprintf("  Delta: %.2f%%, Trend: %s, Significance: %s\n",
 					change.DeltaPercentage*100, change.Trend, change.ChangeSignificance))
-				sb.WriteString(fmt.Sprintf("  Baseline Window: %s (%d days)\n\n",
+				sb.WriteString(fmt.Sprintf("  Baseline Window: %s (%d days)\n",
 					change.BaselineWindow, change.BaselineDays))
 			}
+
+			// Append pattern evidence (severity, confidence, affected users)
+			key := change.PatternType + ":" + change.Flow
+			if ev, ok := patternEvidence[key]; ok {
+				sb.WriteString(fmt.Sprintf("  Severity: %s, Confidence: %s\n", ev.Severity, ev.Confidence))
+				sb.WriteString(fmt.Sprintf("  Affected Users: %d / %d total flows (%.0f%%)\n",
+					ev.AffectedUsers, ev.TotalFlows, ev.Evidence.Ratio*100))
+				if ev.Evidence.Description != "" {
+					sb.WriteString(fmt.Sprintf("  Evidence: %s\n", ev.Evidence.Description))
+				}
+			}
+
+			sb.WriteString("\n")
 		}
 	} else {
 		sb.WriteString("No significant changes detected compared to baseline.\n")
 	}
 
-	sb.WriteString("\nProvide your analysis in the required JSON format.")
+	// Append context breakdown if available
+	if len(contextBreakdown) > 0 {
+		sb.WriteString("## Context Breakdown:\n")
+		sb.WriteString("Distribution of properties across analyzed flows:\n")
+		for flowName, props := range contextBreakdown {
+			sb.WriteString(fmt.Sprintf("\nFlow: %s\n", flowName))
+			for propName, values := range props {
+				sortedVals := sortedValueCounts(values)
+				sb.WriteString(fmt.Sprintf("  %s: %s\n", propName, sortedVals))
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("Provide your analysis in the required JSON format.")
 
 	return sb.String(), nil
+}
+
+// buildPatternEvidenceMap creates a lookup of "patternType:flow" → DetectedPattern
+func buildPatternEvidenceMap(detected interface{}) map[string]*pattern.DetectedPattern {
+	result := make(map[string]*pattern.DetectedPattern)
+	patterns, ok := detected.([]*pattern.DetectedPattern)
+	if !ok {
+		return result
+	}
+	for _, p := range patterns {
+		key := string(p.Pattern) + ":" + p.Flow
+		result[key] = p
+	}
+	return result
+}
+
+// buildContextBreakdown summarises the dimensional/conditional distribution
+// per flow across all analyzed flows. Returns flow → property → value → count.
+func buildContextBreakdown(analyzedFlows interface{}) map[string]map[string]map[string]int {
+	result := make(map[string]map[string]map[string]int)
+	flows, ok := analyzedFlows.([]*behavior.AnalyzedFlow)
+	if !ok {
+		return result
+	}
+	for _, f := range flows {
+		if f.Context == nil {
+			continue
+		}
+		props, exists := result[f.Flow]
+		if !exists {
+			props = make(map[string]map[string]int)
+			result[f.Flow] = props
+		}
+		// Dimensions (e.g. device=mobile)
+		for k, v := range f.Context.Dimensions {
+			if props[k] == nil {
+				props[k] = make(map[string]int)
+			}
+			props[k][v]++
+		}
+		// Conditions (e.g. error_code=card_declined)
+		for k, v := range f.Context.Conditions {
+			if props[k] == nil {
+				props[k] = make(map[string]int)
+			}
+			props[k][fmt.Sprintf("%v", v)]++
+		}
+		// Targets (e.g. plan_name=premium)
+		for k, v := range f.Context.Targets {
+			if props[k] == nil {
+				props[k] = make(map[string]int)
+			}
+			props[k][fmt.Sprintf("%v", v)]++
+		}
+	}
+	return result
+}
+
+// sortedValueCounts formats a value→count map as a sorted readable string
+// e.g. "mobile(3), desktop(2)"
+func sortedValueCounts(values map[string]int) string {
+	type vc struct {
+		Value string
+		Count int
+	}
+	var pairs []vc
+	for v, c := range values {
+		pairs = append(pairs, vc{v, c})
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		if pairs[i].Count != pairs[j].Count {
+			return pairs[i].Count > pairs[j].Count
+		}
+		return pairs[i].Value < pairs[j].Value
+	})
+	var parts []string
+	for _, p := range pairs {
+		parts = append(parts, fmt.Sprintf("%s(%d)", p.Value, p.Count))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // parseAIResponse extracts the structured response from AI output

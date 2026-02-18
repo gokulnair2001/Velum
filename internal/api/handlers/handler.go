@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/velum/internal/canonical"
 	"github.com/velum/internal/config"
 	"github.com/velum/internal/layers"
 	"github.com/velum/internal/layers/ai"
@@ -14,6 +15,7 @@ import (
 	"github.com/velum/internal/layers/behavior"
 	"github.com/velum/internal/layers/eventadapter"
 	"github.com/velum/internal/layers/pattern"
+	"github.com/velum/internal/layers/propertyagent"
 	"github.com/velum/internal/layers/sessionflow"
 	"github.com/velum/internal/layers/vocabagent"
 	"github.com/velum/internal/storage"
@@ -21,10 +23,11 @@ import (
 
 // Handler holds dependencies for HTTP handlers
 type Handler struct {
-	pipeline     *layers.Pipeline
-	storage      storage.Storage
-	vocabStorage *vocabagent.PostgresVocabStorage
-	environment  string
+	pipeline        *layers.Pipeline
+	storage         storage.Storage
+	vocabStorage    *vocabagent.PostgresVocabStorage
+	propertyStorage *propertyagent.PostgresPropertyStorage
+	environment     string
 }
 
 // NewHandler creates a new handler instance with the provided configuration
@@ -72,7 +75,47 @@ func NewHandler(cfg *config.Config) *Handler {
 	// Initialize the pipeline with layers
 	pipeline := layers.NewPipeline()
 
-	// Layer 0: Vocab Enricher - discovers unknown words and classifies via AI (optional)
+	// Initialize property storage for context agent (same PostgreSQL database)
+	var propertyStorage *propertyagent.PostgresPropertyStorage
+	propertyStorage, err = propertyagent.NewPostgresPropertyStorage(&cfg.Storage.Postgres)
+	if err != nil {
+		fmt.Printf("Warning: Failed to initialize property storage: %v\n", err)
+	} else {
+		// Seed built-in dimensions (only runs if storage is empty)
+		ctx := context.Background()
+		if err := propertyagent.SeedBuiltinDimensions(ctx, propertyStorage); err != nil {
+			fmt.Printf("Warning: Failed to seed property registry: %v\n", err)
+		}
+	}
+
+	// Layer 0: Context Enricher - classifies event properties into dimensions/targets/conditions/measures
+	// Dimensions resolved by built-in list, measures by type inference, target vs condition by AI
+	if cfg.ContextAgent.Enabled && cfg.ContextAgent.APIKey != "" && propertyStorage != nil {
+		resetTimeout, err := time.ParseDuration(cfg.Resiliency.CircuitBreaker.ResetTimeout)
+		if err != nil {
+			resetTimeout = 30 * time.Second
+		}
+
+		contextAgentConfig := &propertyagent.Config{
+			Enabled: cfg.ContextAgent.Enabled,
+			APIKey:  cfg.ContextAgent.APIKey,
+			Model:   cfg.ContextAgent.Model,
+			Debug:   cfg.Server.Environment == "development",
+			CircuitBreaker: propertyagent.CircuitBreakerConfig{
+				Enabled:          cfg.Resiliency.CircuitBreaker.Enabled,
+				FailureThreshold: cfg.Resiliency.CircuitBreaker.FailureThreshold,
+				ResetTimeout:     resetTimeout,
+			},
+		}
+		contextAgent := propertyagent.NewAgentWithConfig(contextAgentConfig)
+		contextEnricher := propertyagent.NewContextEnricher(propertyStorage, contextAgent, cfg.Server.Environment == "development")
+		pipeline.Register(contextEnricher)
+		fmt.Println("Context Enricher layer enabled with model:", cfg.ContextAgent.Model)
+	} else {
+		fmt.Println("Context Enricher layer disabled (enabled:", cfg.ContextAgent.Enabled, ", api_key set:", cfg.ContextAgent.APIKey != "", ", storage:", propertyStorage != nil, ")")
+	}
+
+	// Layer 1: Vocab Enricher - discovers unknown words and classifies via AI (optional)
 	// Only registered if vocab agent is enabled in config and API key is provided
 	if cfg.VocabAgent.Enabled && cfg.VocabAgent.APIKey != "" && vocabStorage != nil {
 		// Parse circuit breaker reset timeout
@@ -100,9 +143,12 @@ func NewHandler(cfg *config.Config) *Handler {
 		fmt.Println("Vocab Enricher layer disabled (enabled:", cfg.VocabAgent.Enabled, ", api_key set:", cfg.VocabAgent.APIKey != "", ", storage:", vocabStorage != nil, ")")
 	}
 
-	// Layer 1: Event Adapter - normalizes raw events
-	// Use vocab storage for external lookup if available
-	if vocabStorage != nil {
+	// Layer 2: Event Adapter - normalizes raw events and builds canonical context
+	// Uses vocab storage for word categorization and property storage for context building
+	if vocabStorage != nil && propertyStorage != nil {
+		pipeline.Register(eventadapter.NewWithLookups(vocabStorage, propertyStorage))
+		fmt.Println("Event Adapter using PostgreSQL vocabulary + property registry lookup")
+	} else if vocabStorage != nil {
 		pipeline.Register(eventadapter.NewWithVocabLookup(vocabStorage))
 		fmt.Println("Event Adapter using PostgreSQL vocabulary lookup")
 	} else {
@@ -166,10 +212,11 @@ func NewHandler(cfg *config.Config) *Handler {
 	}
 
 	return &Handler{
-		pipeline:     pipeline,
-		storage:      storageInstance,
-		vocabStorage: vocabStorage,
-		environment:  cfg.Server.Environment,
+		pipeline:        pipeline,
+		storage:         storageInstance,
+		vocabStorage:    vocabStorage,
+		propertyStorage: propertyStorage,
+		environment:     cfg.Server.Environment,
 	}
 }
 
@@ -229,11 +276,19 @@ func (h *Handler) Analyze(w http.ResponseWriter, r *http.Request) {
 	// Debug mode is enabled in development environment (only affects console logging)
 	isDebugMode := h.environment == "development"
 
+	// Check recommended properties and collect warnings
+	warnings := canonical.CheckRecommendedProperties(req.Events)
+
 	if isDebugMode {
 		fmt.Println("[DEBUG] ======= New Analysis Request =======")
 		fmt.Printf("[DEBUG] Environment: %s\n", h.environment)
 		fmt.Printf("[DEBUG] Events received: %d\n", len(req.Events))
 		fmt.Printf("[DEBUG] Pipeline layers: %v\n", h.pipeline.LayerNames())
+		if len(warnings) > 0 {
+			for _, w := range warnings {
+				fmt.Printf("[DEBUG] [WARNING] %s\n", w)
+			}
+		}
 		fmt.Println("[DEBUG] Starting pipeline execution...")
 	}
 
@@ -263,19 +318,19 @@ func (h *Handler) Analyze(w http.ResponseWriter, r *http.Request) {
 	case *ai.AIResult:
 		responseData["ai_enabled"] = v.AIEnabled
 		if v.AIEnabled && v.AIAnalysis != nil {
-			// AI enabled: show ai_analysis only
+			// AI enabled: show ai_analysis only (no data object)
 			responseData["ai_analysis"] = v.AIAnalysis
 		} else {
-			// AI disabled: show only change_results with minimal format for first observations
+			// AI disabled: show enriched change_results
 			responseData["data"] = map[string]interface{}{
-				"change_results": formatChangeResults(v.ChangeResults),
+				"change_results": formatChangeResults(v.ChangeResults, v.DetectedPatterns, v.AnalyzedFlows),
 			}
 		}
 	case *baseline.BaselineResult:
-		// Baseline result without AI: show only change_results with minimal format for first observations
+		// Baseline result without AI: show enriched change_results
 		responseData["ai_enabled"] = false
 		responseData["data"] = map[string]interface{}{
-			"change_results": formatChangeResults(v.ChangeResults),
+			"change_results": formatChangeResults(v.ChangeResults, v.DetectedPatterns, v.AnalyzedFlows),
 		}
 	case *pattern.PatternResult:
 		responseData["ai_enabled"] = false
@@ -286,6 +341,11 @@ func (h *Handler) Analyze(w http.ResponseWriter, r *http.Request) {
 	default:
 		responseData["ai_enabled"] = false
 		responseData["data"] = result
+	}
+
+	// Include warnings in response if any recommended properties are missing
+	if len(warnings) > 0 {
+		responseData["warnings"] = warnings
 	}
 
 	respondJSON(w, http.StatusOK, AnalysisResponse{
@@ -302,23 +362,29 @@ func respondJSON(w http.ResponseWriter, status int, payload interface{}) {
 	json.NewEncoder(w).Encode(payload)
 }
 
-// formatChangeResults formats change results for response
-// For first_observation, only return minimal data (pattern_type, flow, baseline_available)
-// For existing baseline, return full data
-func formatChangeResults(changeResults []*baseline.ChangeResult) []map[string]interface{} {
+// formatChangeResults formats change results for response, enriched with
+// pattern evidence (severity, confidence, affected_users) and a per-flow
+// context breakdown (dimensional/conditional distribution across flows).
+func formatChangeResults(changeResults []*baseline.ChangeResult, detectedPatterns interface{}, analyzedFlows interface{}) []map[string]interface{} {
+	// Build lookup maps for enrichment
+	evidenceMap := buildEvidenceMap(detectedPatterns)
+	contextMap := buildFlowContextMap(analyzedFlows)
+
 	formatted := make([]map[string]interface{}, 0, len(changeResults))
 
 	for _, change := range changeResults {
+		var entry map[string]interface{}
+
 		if change.BaselineStatus == baseline.BaselineStatusFirstObservation {
 			// First observation: minimal data only
-			formatted = append(formatted, map[string]interface{}{
+			entry = map[string]interface{}{
 				"pattern_type":       change.PatternType,
 				"flow":               change.Flow,
 				"baseline_available": false,
-			})
+			}
 		} else {
 			// Baseline exists: full data
-			formatted = append(formatted, map[string]interface{}{
+			entry = map[string]interface{}{
 				"pattern_type":          change.PatternType,
 				"flow":                  change.Flow,
 				"baseline_available":    true,
@@ -331,9 +397,86 @@ func formatChangeResults(changeResults []*baseline.ChangeResult) []map[string]in
 				"baseline_status":       change.BaselineStatus,
 				"baseline_window":       change.BaselineWindow,
 				"baseline_days":         change.BaselineDays,
-			})
+			}
 		}
+
+		if change.ContextKey != "" {
+			entry["context_key"] = change.ContextKey
+		}
+
+		// Enrich with pattern evidence
+		key := change.PatternType + ":" + change.Flow
+		if ev, ok := evidenceMap[key]; ok {
+			entry["severity"] = ev.Severity
+			entry["confidence"] = ev.Confidence
+			entry["affected_users"] = ev.AffectedUsers
+			entry["total_flows"] = ev.TotalFlows
+			entry["impact_ratio"] = ev.Evidence.Ratio
+			if ev.Evidence.Description != "" {
+				entry["evidence"] = ev.Evidence.Description
+			}
+		}
+
+		// Enrich with context breakdown for this flow
+		if ctx, ok := contextMap[change.Flow]; ok && len(ctx) > 0 {
+			entry["context"] = ctx
+		}
+
+		formatted = append(formatted, entry)
 	}
 
 	return formatted
+}
+
+// buildEvidenceMap creates a lookup of "patternType:flow" -> DetectedPattern.
+func buildEvidenceMap(detected interface{}) map[string]*pattern.DetectedPattern {
+	result := make(map[string]*pattern.DetectedPattern)
+	patterns, ok := detected.([]*pattern.DetectedPattern)
+	if !ok {
+		return result
+	}
+	for _, p := range patterns {
+		key := string(p.Pattern) + ":" + p.Flow
+		result[key] = p
+	}
+	return result
+}
+
+// buildFlowContextMap aggregates context properties per flow from analyzed flows.
+// Returns flow -> property -> value -> count.
+func buildFlowContextMap(analyzedFlows interface{}) map[string]map[string]map[string]int {
+	result := make(map[string]map[string]map[string]int)
+	flows, ok := analyzedFlows.([]*behavior.AnalyzedFlow)
+	if !ok {
+		return result
+	}
+	for _, f := range flows {
+		if f.Context == nil {
+			continue
+		}
+		props, exists := result[f.Flow]
+		if !exists {
+			props = make(map[string]map[string]int)
+			result[f.Flow] = props
+		}
+		for k, v := range f.Context.Dimensions {
+			if props[k] == nil {
+				props[k] = make(map[string]int)
+			}
+			props[k][v]++
+		}
+		for k, v := range f.Context.Conditions {
+			if props[k] == nil {
+				props[k] = make(map[string]int)
+			}
+			props[k][fmt.Sprintf("%v", v)]++
+		}
+		for k, v := range f.Context.Targets {
+			if props[k] == nil {
+				props[k] = make(map[string]int)
+			}
+			props[k][fmt.Sprintf("%v", v)]++
+		}
+	}
+	return result
 }

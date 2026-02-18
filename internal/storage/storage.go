@@ -11,6 +11,7 @@ type PatternSnapshot struct {
 	Date           time.Time `json:"date"`
 	PatternType    string    `json:"pattern_type"`
 	Flow           string    `json:"flow"`
+	ContextKey     string    `json:"context_key"`
 	AffectedUsers  int       `json:"affected_users"`
 	TotalFlows     int       `json:"total_flows"`
 	ImpactRatio    float64   `json:"impact_ratio"`
@@ -22,9 +23,9 @@ type PatternSnapshot struct {
 // Storage defines the interface for baseline data persistence
 // Any storage backend (PostgreSQL, etc.) must implement this
 type Storage interface {
-	// FetchBaselineSnapshots retrieves historical snapshots for a pattern+flow
+	// FetchBaselineSnapshots retrieves historical snapshots for a pattern+flow+context
 	// Used for baseline computation
-	FetchBaselineSnapshots(ctx context.Context, patternType, flow string, endDate time.Time, windowDays int) ([]*PatternSnapshot, error)
+	FetchBaselineSnapshots(ctx context.Context, patternType, flow, contextKey string, endDate time.Time, windowDays int) ([]*PatternSnapshot, error)
 
 	// StoreSnapshot persists a pattern snapshot (upsert semantics)
 	// Idempotent - safe for retries

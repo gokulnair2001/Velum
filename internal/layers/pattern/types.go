@@ -4,12 +4,12 @@ package pattern
 type PatternType string
 
 const (
-	PatternRetryStorm         PatternType = "retry_storm"
-	PatternConfusionLoop      PatternType = "confusion_loop"
-	PatternSilentAbandonment  PatternType = "silent_abandonment"
-	PatternEarlyDropoff       PatternType = "early_dropoff"
-	PatternBypassBehavior     PatternType = "bypass_behavior"
-	PatternMaskedFailure      PatternType = "masked_failure"
+	PatternRetryStorm        PatternType = "retry_storm"
+	PatternConfusionLoop     PatternType = "confusion_loop"
+	PatternSilentAbandonment PatternType = "silent_abandonment"
+	PatternEarlyDropoff      PatternType = "early_dropoff"
+	PatternBypassBehavior    PatternType = "bypass_behavior"
+	PatternMaskedFailure     PatternType = "masked_failure"
 )
 
 // Severity represents the severity level of a pattern
@@ -32,21 +32,22 @@ const (
 
 // DetectedPattern represents a pattern found in the behavioral data
 type DetectedPattern struct {
-	Pattern       PatternType       `json:"pattern"`
-	Flow          string            `json:"flow"`
-	AffectedUsers int               `json:"affected_users"`
-	TotalFlows    int               `json:"total_flows"`
-	Severity      Severity          `json:"severity"`
-	Confidence    Confidence        `json:"confidence"`
-	Evidence      PatternEvidence   `json:"evidence"`
+	Pattern       PatternType     `json:"pattern"`
+	Flow          string          `json:"flow"`
+	ContextKey    string          `json:"context_key"`
+	AffectedUsers int             `json:"affected_users"`
+	TotalFlows    int             `json:"total_flows"`
+	Severity      Severity        `json:"severity"`
+	Confidence    Confidence      `json:"confidence"`
+	Evidence      PatternEvidence `json:"evidence"`
 }
 
 // PatternEvidence provides supporting data for the detected pattern
 type PatternEvidence struct {
-	MatchingFlows   int      `json:"matching_flows"`
-	Ratio           float64  `json:"ratio"`
-	Description     string   `json:"description"`
-	SampleFlowIDs   []string `json:"sample_flow_ids,omitempty"`
+	MatchingFlows int      `json:"matching_flows"`
+	Ratio         float64  `json:"ratio"`
+	Description   string   `json:"description"`
+	SampleFlowIDs []string `json:"sample_flow_ids,omitempty"`
 }
 
 // Config holds configuration for pattern detection

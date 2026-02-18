@@ -2,19 +2,25 @@ package sessionflow
 
 import (
 	"time"
+
+	"github.com/velum/internal/canonical"
 )
 
 // FlowInstance represents a single user intent attempt
 type FlowInstance struct {
-	FlowInstanceID string       `json:"flow_instance_id"`
-	UserID         string       `json:"user_id"`
-	Flow           string       `json:"flow"`
-	ContextType    string       `json:"context_type"` // "explicit_session" | "windowed"
-	Confidence     string       `json:"confidence"`   // "high" | "medium" | "low"
-	Events         []FlowEvent  `json:"events"`
-	StartTime      time.Time    `json:"start_time"`
-	EndTime        time.Time    `json:"end_time,omitempty"`
-	IsComplete     bool         `json:"is_complete"`
+	FlowInstanceID string      `json:"flow_instance_id"`
+	UserID         string      `json:"user_id"`
+	Flow           string      `json:"flow"`
+	ContextType    string      `json:"context_type"` // "explicit_session" | "windowed"
+	Confidence     string      `json:"confidence"`   // "high" | "medium" | "low"
+	Events         []FlowEvent `json:"events"`
+	StartTime      time.Time   `json:"start_time"`
+	EndTime        time.Time   `json:"end_time,omitempty"`
+	IsComplete     bool        `json:"is_complete"`
+
+	// Context is the merged canonical context across all events in this flow.
+	// Dimensions use first-seen-wins, targets/conditions/measures use last-wins.
+	Context *canonical.EventContext `json:"context,omitempty"`
 }
 
 // FlowEvent represents an event within a flow instance
@@ -24,17 +30,23 @@ type FlowEvent struct {
 	Status       string    `json:"status"`
 	RawEventName string    `json:"raw_event_name"`
 	SessionID    string    `json:"session_id,omitempty"`
+
+	// Context holds the canonical context for this individual event.
+	Context *canonical.EventContext `json:"context,omitempty"`
 }
 
 // NormalizedEventInput represents the input from the event adapter layer
 type NormalizedEventInput struct {
-	ID        string                 `json:"id"`
-	UserID    interface{}            `json:"user_id"`
-	Timestamp string                 `json:"ts"`
-	SessionID string                 `json:"session_id,omitempty"`
-	Event     string                 `json:"event"`
-	Normalized *NormalizedData       `json:"normalized"`
-	Original  map[string]interface{} `json:"-"`
+	ID         string                 `json:"id"`
+	UserID     interface{}            `json:"user_id"`
+	Timestamp  string                 `json:"ts"`
+	SessionID  string                 `json:"session_id,omitempty"`
+	Event      string                 `json:"event"`
+	Normalized *NormalizedData        `json:"normalized"`
+	Original   map[string]interface{} `json:"-"`
+
+	// Context holds the canonical property classification from the event adapter.
+	Context *canonical.EventContext `json:"-"`
 }
 
 // NormalizedData represents the normalized breakdown from Layer 1

@@ -6,15 +6,27 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
+
+	"github.com/velum/internal/canonical"
 )
 
 // VocabLookup defines an interface for external vocabulary lookup.
-// This allows EventAdapter to use vocabulary stored in SQLite
+// This allows EventAdapter to use vocabulary stored in PostgreSQL
 // without creating circular dependencies.
 type VocabLookup interface {
 	// LookupWord returns the category for a word, or empty string if not found.
 	// Categories are: "status", "surface", "flow"
 	LookupWord(ctx context.Context, word string) (category string, err error)
+}
+
+// PropertyLookup defines an interface for external property registry lookup.
+// This allows EventAdapter to build canonical context from the property registry
+// without creating circular dependencies with the propertyagent package.
+type PropertyLookup interface {
+	// LookupProperty returns the role and label for a property key.
+	// Returns empty role if not found.
+	// Roles are: "dimension", "target", "condition", "measure"
+	LookupProperty(ctx context.Context, keyName string) (role string, label string, err error)
 }
 
 // NormalizedEvent represents a cleaned and categorized event
@@ -37,6 +49,10 @@ type ProcessedEvent struct {
 
 	// Normalized breakdown of the event
 	Normalized *NormalizedEvent `json:"normalized"`
+
+	// Context holds the canonical property classification.
+	// Built by EventAdapter from property registry DB lookups — same pattern as vocabulary.
+	Context *canonical.EventContext `json:"context,omitempty"`
 }
 
 // MarshalJSON custom marshaler to flatten original fields into output
@@ -50,13 +66,19 @@ func (p *ProcessedEvent) MarshalJSON() ([]byte, error) {
 	// Add normalized data
 	result["normalized"] = p.Normalized
 
+	// Add canonical context if present
+	if p.Context != nil && !p.Context.IsEmpty() {
+		result["context"] = p.Context
+	}
+
 	return json.Marshal(result)
 }
 
 // EventAdapter is the first layer - cleans raw events into consumable data
 type EventAdapter struct {
-	vocab       *Vocabulary
-	vocabLookup VocabLookup // Optional external vocab lookup (e.g., PostgreSQL)
+	vocab          *Vocabulary
+	vocabLookup    VocabLookup    // Optional external vocab lookup (e.g., PostgreSQL)
+	propertyLookup PropertyLookup // Optional external property registry lookup
 }
 
 // New creates a new EventAdapter with default vocabulary
@@ -78,6 +100,16 @@ func NewWithVocabLookup(lookup VocabLookup) *EventAdapter {
 	return &EventAdapter{
 		vocab:       NewVocabulary(),
 		vocabLookup: lookup,
+	}
+}
+
+// NewWithLookups creates an EventAdapter with both vocabulary and property registry lookups.
+// This is the recommended constructor when both vocab and property storage are available.
+func NewWithLookups(vocabLookup VocabLookup, propertyLookup PropertyLookup) *EventAdapter {
+	return &EventAdapter{
+		vocab:          NewVocabulary(),
+		vocabLookup:    vocabLookup,
+		propertyLookup: propertyLookup,
 	}
 }
 
@@ -149,6 +181,9 @@ func (e *EventAdapter) processEventMap(event map[string]interface{}) *ProcessedE
 	for k, v := range event {
 		processed.OriginalFields[k] = v
 	}
+
+	// Build canonical context from property registry (same pattern as vocab lookup)
+	processed.Context = e.buildEventContext(event)
 
 	// Look for event name field and normalize it
 	eventNameFields := []string{"event", "event_name", "eventName", "name", "action", "type"}
@@ -306,4 +341,59 @@ func contains(slice []string, str string) bool {
 // GetVocabulary returns the current vocabulary for inspection/modification
 func (e *EventAdapter) GetVocabulary() *Vocabulary {
 	return e.vocab
+}
+
+// buildEventContext iterates over all event properties and builds an EventContext
+// by looking up each property from the property registry DB.
+// Same pattern as vocabulary: each property is looked up individually from DB.
+//   - Core fields (event, user_id, etc.) → skipped
+//   - Built-in dimensions (device, country, etc.) → dimension (no DB needed)
+//   - Numeric values → measure (type inference, no DB needed)
+//   - DB registry hit → apply cached role (target or condition)
+//   - Unknown (no DB entry) → skipped (ContextEnricher will learn it for next time)
+func (e *EventAdapter) buildEventContext(event map[string]interface{}) *canonical.EventContext {
+	ec := canonical.NewEventContext()
+
+	for key, value := range event {
+		// Skip core fields
+		if canonical.IsCoreField(key) {
+			continue
+		}
+
+		// 1. Check built-in dimensions (deterministic, no DB)
+		if label, isDim := canonical.IsDimension(key); isDim {
+			ec.Dimensions[label] = canonical.FormatSampleValue(value)
+			continue
+		}
+
+		// 2. Check if numeric → measure (type inference)
+		if numVal, isMeasure := canonical.IsMeasureValue(value); isMeasure {
+			ec.Measures[key] = numVal
+			continue
+		}
+
+		// 3. Look up from property registry DB (like vocab lookup)
+		if e.propertyLookup != nil {
+			role, _, err := e.propertyLookup.LookupProperty(context.Background(), key)
+			if err == nil && role != "" {
+				switch canonical.PropertyRole(role) {
+				case canonical.RoleDimension:
+					ec.Dimensions[key] = canonical.FormatSampleValue(value)
+				case canonical.RoleTarget:
+					ec.Targets[key] = value
+				case canonical.RoleCondition:
+					ec.Conditions[key] = value
+				case canonical.RoleMeasure:
+					if numVal, ok := canonical.IsMeasureValue(value); ok {
+						ec.Measures[key] = numVal
+					}
+				}
+			}
+		}
+	}
+
+	if ec.IsEmpty() {
+		return nil
+	}
+	return ec
 }

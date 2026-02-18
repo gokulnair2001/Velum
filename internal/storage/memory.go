@@ -18,7 +18,7 @@ func NewInMemoryStorage() *InMemoryStorage {
 }
 
 // FetchBaselineSnapshots retrieves snapshots from memory
-func (s *InMemoryStorage) FetchBaselineSnapshots(ctx context.Context, patternType, flow string, endDate time.Time, windowDays int) ([]*PatternSnapshot, error) {
+func (s *InMemoryStorage) FetchBaselineSnapshots(ctx context.Context, patternType, flow, contextKey string, endDate time.Time, windowDays int) ([]*PatternSnapshot, error) {
 	startDate := endDate.AddDate(0, 0, -windowDays)
 	// End date is exclusive (up to yesterday)
 	endDateExclusive := endDate.AddDate(0, 0, -1)
@@ -27,6 +27,7 @@ func (s *InMemoryStorage) FetchBaselineSnapshots(ctx context.Context, patternTyp
 	for _, snap := range s.snapshots {
 		if snap.PatternType == patternType &&
 			snap.Flow == flow &&
+			snap.ContextKey == contextKey &&
 			!snap.Date.Before(startDate) &&
 			!snap.Date.After(endDateExclusive) {
 			results = append(results, snap)
@@ -42,6 +43,7 @@ func (s *InMemoryStorage) StoreSnapshot(ctx context.Context, snapshot *PatternSn
 	for i, existing := range s.snapshots {
 		if existing.PatternType == snapshot.PatternType &&
 			existing.Flow == snapshot.Flow &&
+			existing.ContextKey == snapshot.ContextKey &&
 			existing.Date.Format("2006-01-02") == snapshot.Date.Format("2006-01-02") {
 			s.snapshots[i] = snapshot
 			return nil

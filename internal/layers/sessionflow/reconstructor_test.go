@@ -368,3 +368,58 @@ func TestFlowTimeout(t *testing.T) {
 		t.Fatalf("Expected 2 flow instances due to timeout, got %d", len(flowInstances))
 	}
 }
+
+func TestParseTimestampEpochFormats(t *testing.T) {
+	r := New()
+
+	tests := []struct {
+		name     string
+		input    string
+		wantYear int
+		wantZero bool
+	}{
+		{"epoch_ms", "1707500000000", 2024, false},
+		{"epoch_ms_scientific", "1.7075e+12", 2024, false},
+		{"epoch_ms_scientific_precise", "1.707500015e+12", 2024, false},
+		{"epoch_s", "1707500000", 2024, false},
+		{"iso8601", "2026-02-04T10:00:00Z", 2026, false},
+		{"rfc3339", "2026-02-04T10:00:00+05:30", 2026, false},
+		{"invalid", "not-a-timestamp", 0, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := r.parseTimestamp(tt.input)
+			if tt.wantZero {
+				if !result.IsZero() {
+					t.Errorf("expected zero time for %q, got %v", tt.input, result)
+				}
+			} else {
+				if result.IsZero() {
+					t.Errorf("expected non-zero time for %q, got zero", tt.input)
+				}
+				if result.Year() != tt.wantYear {
+					t.Errorf("expected year %d for %q, got %d (%v)", tt.wantYear, tt.input, result.Year(), result)
+				}
+			}
+		})
+	}
+}
+
+func TestSortByTimestampEpochMs(t *testing.T) {
+	r := New()
+
+	// Simulate epoch ms timestamps as they come from JSON (float64 → %v → scientific notation)
+	events := []*NormalizedEventInput{
+		{ID: "3", Timestamp: "1.70750003e+12"},  // 30s later
+		{ID: "1", Timestamp: "1.7075e+12"},      // earliest
+		{ID: "2", Timestamp: "1.707500015e+12"}, // 15s later
+	}
+
+	r.sortByTimestamp(events)
+
+	if events[0].ID != "1" || events[1].ID != "2" || events[2].ID != "3" {
+		t.Errorf("Epoch ms events not sorted correctly: got %s, %s, %s",
+			events[0].ID, events[1].ID, events[2].ID)
+	}
+}

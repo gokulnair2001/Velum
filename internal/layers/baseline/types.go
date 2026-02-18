@@ -42,6 +42,7 @@ type BaselineStats struct {
 type ChangeResult struct {
 	PatternType         string         `json:"pattern_type"`
 	Flow                string         `json:"flow"`
+	ContextKey          string         `json:"context_key"`
 	CurrentImpactRatio  float64        `json:"current_impact_ratio"`
 	BaselineImpactRatio float64        `json:"baseline_impact_ratio"`
 	Delta               float64        `json:"delta"`
