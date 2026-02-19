@@ -77,6 +77,90 @@ func NewVocabulary() *Vocabulary {
 			// Resolution states
 			"resolve":  "resolve",
 			"resolved": "resolve",
+
+			// Attempt/Initiation states
+			"attempt":   "attempt",
+			"attempted": "attempt",
+			"try":       "attempt",
+			"tried":     "attempt",
+			"retry":     "attempt",
+			"initiate":  "start",
+			"initiated": "start",
+			"trigger":   "start",
+			"triggered": "start",
+
+			// Confirmation/Placement states
+			"confirm":   "success",
+			"confirmed": "success",
+			"place":     "success",
+			"placed":    "success",
+			"accept":    "success",
+			"accepted":  "success",
+			"approve":   "success",
+			"approved":  "success",
+
+			// Rejection/Denial states
+			"reject":   "failed",
+			"rejected": "failed",
+			"deny":     "failed",
+			"denied":   "failed",
+			"decline":  "failed",
+			"declined": "failed",
+			"timeout":  "failed",
+
+			// Request states
+			"request":   "request",
+			"requested": "request",
+
+			// Apply states
+			"apply":   "apply",
+			"applied": "apply",
+
+			// Scroll/interaction states
+			"scroll":    "scroll",
+			"scrolled":  "scroll",
+			"swipe":     "swipe",
+			"swiped":    "swipe",
+			"select":    "select",
+			"selected":  "select",
+			"expand":    "expand",
+			"expanded":  "expand",
+			"collapse":  "collapse",
+			"collapsed": "collapse",
+
+			// CRUD action states — these are user actions, not flow categories.
+			// The flow name comes from the target noun (e.g. "add_to_cart" → cart).
+			"add":       "add",
+			"added":     "add",
+			"create":    "create",
+			"created":   "create",
+			"insert":    "add",
+			"inserted":  "add",
+			"remove":    "remove",
+			"removed":   "remove",
+			"delete":    "remove",
+			"deleted":   "remove",
+			"update":    "update",
+			"updated":   "update",
+			"edit":      "update",
+			"edited":    "update",
+			"modify":    "update",
+			"change":    "update",
+			"changed":   "update",
+			"save":      "save",
+			"saved":     "save",
+			"submit":    "submit",
+			"submitted": "submit",
+			"post":      "submit",
+			"upload":    "upload",
+			"uploaded":  "upload",
+			"download":  "download",
+			"share":     "share",
+			"shared":    "share",
+			"invite":    "share",
+			"invited":   "share",
+			"export":    "export",
+			"exported":  "export",
 		},
 
 		Surface: map[string]string{
@@ -94,14 +178,20 @@ func NewVocabulary() *Vocabulary {
 			"footer":     "footer",
 
 			// Commerce
-			"checkout":  "checkout",
-			"cart":      "cart",
-			"basket":    "cart",
-			"product":   "product",
-			"item":      "product",
-			"catalog":   "catalog",
-			"shop":      "shop",
-			"store":     "shop",
+			"cart":       "cart",
+			"basket":     "cart",
+			"product":    "product",
+			"item":       "product",
+			"catalog":    "catalog",
+			"shop":       "shop",
+			"store":      "shop",
+			"restaurant": "restaurant",
+			"delivery":   "delivery",
+			"eta":        "delivery",
+			"promo":      "promo",
+			"coupon":     "promo",
+			"discount":   "promo",
+			"voucher":    "promo",
 
 			// UI Components
 			"modal":    "modal",
@@ -126,7 +216,6 @@ func NewVocabulary() *Vocabulary {
 			"tab":      "tab",
 			"tabs":     "tab",
 			"dropdown": "dropdown",
-			"select":   "dropdown",
 			"banner":   "banner",
 			"alert":    "alert",
 			"toast":    "toast",
@@ -135,15 +224,20 @@ func NewVocabulary() *Vocabulary {
 			// Screens/Pages
 			"page":      "page",
 			"screen":    "screen",
-			"view":      "view",
 			"dashboard": "dashboard",
 			"settings":  "settings",
 			"profile":   "profile",
 			"account":   "account",
-			"search":    "search",
 			"results":   "results",
 			"detail":    "detail",
 			"details":   "detail",
+
+			// Session
+			"session":      "session",
+			"wizard":       "wizard",
+			"step":         "step",
+			"notification": "notification",
+			"inbox":        "inbox",
 		},
 
 		Flow: map[string]string{
@@ -164,16 +258,7 @@ func NewVocabulary() *Vocabulary {
 			"onboarding":   "onboarding",
 
 			// CRUD - Creation
-			"create":   "creation",
-			"created":  "creation",
-			"add":      "creation",
-			"added":    "creation",
-			"new":      "creation",
-			"insert":   "creation",
-			"inserted": "creation",
-			"post":     "creation",
-			"submit":   "creation",
-			"submitted": "creation",
+			"new": "creation",
 
 			// CRUD - Read
 			"read":      "retrieval",
@@ -185,23 +270,10 @@ func NewVocabulary() *Vocabulary {
 			"retrieved": "retrieval",
 
 			// CRUD - Update
-			"update":  "update",
-			"updated": "update",
-			"edit":    "update",
-			"edited":  "update",
-			"modify":  "update",
-			"change":  "update",
-			"changed": "update",
-			"save":    "update",
-			"saved":   "update",
 
 			// CRUD - Delete
-			"delete":  "deletion",
-			"deleted": "deletion",
-			"remove":  "deletion",
-			"removed": "deletion",
-			"cancel":  "cancellation",
-			"canceled": "cancellation",
+			"cancel":    "cancellation",
+			"canceled":  "cancellation",
 			"cancelled": "cancellation",
 
 			// Search
@@ -224,35 +296,31 @@ func NewVocabulary() *Vocabulary {
 			"refund":   "refund",
 
 			// Sharing
-			"share":    "sharing",
-			"shared":   "sharing",
-			"invite":   "sharing",
-			"invited":  "sharing",
-			"export":   "export",
-			"exported": "export",
-			"download": "download",
-			"upload":   "upload",
-			"uploaded": "upload",
 
 			// Document flows
-			"doc":       "document",
-			"document":  "document",
-			"documents": "document",
-			"file":      "document",
-			"files":     "document",
-			"comment":   "commenting",
+			"doc":        "document",
+			"document":   "document",
+			"documents":  "document",
+			"file":       "document",
+			"files":      "document",
+			"comment":    "commenting",
 			"commenting": "commenting",
-			"annotate":  "commenting",
+			"annotate":   "commenting",
 			"annotation": "commenting",
 
 			// Navigation flows
 			"navigate":  "navigation",
 			"navigated": "navigation",
 			"redirect":  "navigation",
-			"scroll":    "scroll",
-			"scrolled":  "scroll",
-			"swipe":     "swipe",
-			"swiped":    "swipe",
+
+			// Subscription / Billing
+			"subscribe":    "subscription",
+			"subscription": "subscription",
+			"unsubscribe":  "subscription",
+			"renew":        "subscription",
+			"renewal":      "subscription",
+			"billing":      "billing",
+			"invoice":      "billing",
 		},
 
 		Noise: map[string]bool{

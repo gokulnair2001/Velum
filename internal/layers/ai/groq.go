@@ -64,6 +64,14 @@ Metrics & baselines
 - If baseline comparison is missing or baseline_available is false, you MUST
   explicitly state that baseline comparison is not available.
 - You MUST NOT calculate, infer, or assume baseline values.
+- When ALL patterns have "Baseline Available: false" (first observation), this
+  means the system is seeing these flows FOR THE FIRST TIME. Do NOT interpret
+  first observations as anomalies, problems, or dropoffs. Instead describe
+  them as newly observed behavioral patterns that will serve as the initial
+  baseline for future comparison.
+- First observations with no baseline should focus on DESCRIBING the observed
+  flow structure (what flows exist, how they relate) rather than diagnosing
+  issues.
 
 Language & interpretation constraints
 - The summary MUST describe WHAT was observed, not WHY.
@@ -334,6 +342,24 @@ func (a *Analyzer) buildUserPrompt(baselineResult *baseline.BaselineResult) (str
 	patternEvidence := buildPatternEvidenceMap(baselineResult.DetectedPatterns)
 	contextBreakdown := buildContextBreakdown(baselineResult.AnalyzedFlows)
 
+	// Summarize baseline status upfront
+	totalChanges := len(baselineResult.ChangeResults)
+	firstObsCount := 0
+	for _, change := range baselineResult.ChangeResults {
+		if change.BaselineStatus == baseline.BaselineStatusFirstObservation {
+			firstObsCount++
+		}
+	}
+	if totalChanges > 0 && firstObsCount == totalChanges {
+		sb.WriteString("**NOTE:** ALL patterns below are FIRST OBSERVATIONS — the system is seeing ")
+		sb.WriteString("these flows for the first time. There is NO baseline to compare against. ")
+		sb.WriteString("Do not interpret these as anomalies or problems. Describe the observed ")
+		sb.WriteString("flow structure and note that these will become the baseline for future runs.\n\n")
+	} else if firstObsCount > 0 {
+		sb.WriteString(fmt.Sprintf("**NOTE:** %d of %d patterns are first observations (no baseline yet).\n\n",
+			firstObsCount, totalChanges))
+	}
+
 	// Add change results if present
 	if len(baselineResult.ChangeResults) > 0 {
 		sb.WriteString("## Detected Changes:\n")
@@ -478,29 +504,52 @@ func sortedValueCounts(values map[string]int) string {
 
 // parseAIResponse extracts the structured response from AI output
 func (a *Analyzer) parseAIResponse(content string) (*AnalysisResponse, error) {
-	// Clean up the content - remove markdown code blocks if present
-	content = strings.TrimSpace(content)
-	if strings.HasPrefix(content, "```json") {
-		content = strings.TrimPrefix(content, "```json")
-	}
-	if strings.HasPrefix(content, "```") {
-		content = strings.TrimPrefix(content, "```")
-	}
-	if strings.HasSuffix(content, "```") {
-		content = strings.TrimSuffix(content, "```")
-	}
 	content = strings.TrimSpace(content)
 
+	// Strategy 1: Try direct JSON parse first (ideal case)
 	var response AnalysisResponse
-	if err := json.Unmarshal([]byte(content), &response); err != nil {
-		// If parsing fails, return a basic response with the raw content
-		return &AnalysisResponse{
-			Summary:        "Analysis complete",
-			Details:        []string{content},
-			Hypotheses:     []string{},
-			ConfidenceNote: "Raw AI response (structured parsing failed)",
-		}, nil
+	if err := json.Unmarshal([]byte(content), &response); err == nil {
+		return &response, nil
 	}
 
-	return &response, nil
+	// Strategy 2: Extract JSON from markdown code block (```json ... ```)
+	// The LLM often wraps JSON in code blocks and adds commentary after
+	if idx := strings.Index(content, "```json"); idx != -1 {
+		after := content[idx+len("```json"):]
+		if endIdx := strings.Index(after, "```"); endIdx != -1 {
+			extracted := strings.TrimSpace(after[:endIdx])
+			if err := json.Unmarshal([]byte(extracted), &response); err == nil {
+				return &response, nil
+			}
+		}
+	}
+
+	// Strategy 3: Extract JSON from generic code block (``` ... ```)
+	if idx := strings.Index(content, "```"); idx != -1 {
+		after := content[idx+len("```"):]
+		if endIdx := strings.Index(after, "```"); endIdx != -1 {
+			extracted := strings.TrimSpace(after[:endIdx])
+			if err := json.Unmarshal([]byte(extracted), &response); err == nil {
+				return &response, nil
+			}
+		}
+	}
+
+	// Strategy 4: Find the first { and last } — extract the outermost JSON object
+	firstBrace := strings.Index(content, "{")
+	lastBrace := strings.LastIndex(content, "}")
+	if firstBrace != -1 && lastBrace > firstBrace {
+		extracted := content[firstBrace : lastBrace+1]
+		if err := json.Unmarshal([]byte(extracted), &response); err == nil {
+			return &response, nil
+		}
+	}
+
+	// All strategies failed: return raw content as fallback
+	return &AnalysisResponse{
+		Summary:        "Analysis complete",
+		Details:        []string{content},
+		Hypotheses:     []string{},
+		ConfidenceNote: "Raw AI response (structured parsing failed)",
+	}, nil
 }

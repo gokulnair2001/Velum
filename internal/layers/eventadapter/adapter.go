@@ -14,9 +14,10 @@ import (
 // This allows EventAdapter to use vocabulary stored in PostgreSQL
 // without creating circular dependencies.
 type VocabLookup interface {
-	// LookupWord returns the category for a word, or empty string if not found.
+	// LookupWord returns the category and normalized value for a word.
+	// Returns empty strings if not found.
 	// Categories are: "status", "surface", "flow"
-	LookupWord(ctx context.Context, word string) (category string, err error)
+	LookupWord(ctx context.Context, word string) (category string, normalized string, err error)
 }
 
 // PropertyLookup defines an interface for external property registry lookup.
@@ -235,21 +236,26 @@ func (e *EventAdapter) NormalizeEventString(eventStr string) *NormalizedEvent {
 		categorized := false
 
 		if e.vocabLookup != nil {
-			if category, err := e.vocabLookup.LookupWord(context.Background(), lower); err == nil && category != "" {
+			if category, norm, err := e.vocabLookup.LookupWord(context.Background(), lower); err == nil && category != "" {
+				// Use the normalized value if available, fall back to original word
+				val := norm
+				if val == "" {
+					val = lower
+				}
 				switch category {
 				case "status":
-					if !contains(normalized.Status, lower) {
-						normalized.Status = append(normalized.Status, lower)
+					if !contains(normalized.Status, val) {
+						normalized.Status = append(normalized.Status, val)
 					}
 					categorized = true
 				case "surface":
-					if !contains(normalized.Surface, lower) {
-						normalized.Surface = append(normalized.Surface, lower)
+					if !contains(normalized.Surface, val) {
+						normalized.Surface = append(normalized.Surface, val)
 					}
 					categorized = true
 				case "flow":
-					if !contains(normalized.Flow, lower) {
-						normalized.Flow = append(normalized.Flow, lower)
+					if !contains(normalized.Flow, val) {
+						normalized.Flow = append(normalized.Flow, val)
 					}
 					categorized = true
 				}

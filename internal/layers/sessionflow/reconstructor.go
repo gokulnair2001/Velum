@@ -274,9 +274,22 @@ func (r *Reconstructor) reconstructUserFlows(userID string, events []*Normalized
 		statuses := event.Normalized.Status
 		surfaces := event.Normalized.Surface
 
-		// If no flow detected, use "unknown"
-		if len(flowNames) == 0 {
-			flowNames = []string{"unknown"}
+		// If no flow detected, use surface as a fallback flow name.
+		// This turns events like "restaurant_list_view" into flow "restaurant"
+		// instead of lumping everything into "unknown".
+		// Also, if the only flow names are generic CRUD verbs (creation, retrieval,
+		// update, deletion, etc.), prefer the surface name which is more meaningful.
+		if len(flowNames) == 0 || allGenericFlows(flowNames) {
+			if len(surfaces) > 0 {
+				// Use the first surface token — in event names the leading noun
+				// is typically the domain (e.g. "restaurant" in restaurant_list_view,
+				// "delivery" in delivery_eta_view). For "item_add_to_cart" the
+				// surfaces are [product, cart]; we pick the last non-generic one,
+				// but default to the first which is the domain noun.
+				flowNames = []string{surfaces[0]}
+			} else if len(flowNames) == 0 {
+				flowNames = []string{"unknown"}
+			}
 		}
 
 		// Process each flow the event belongs to
@@ -448,4 +461,25 @@ func toStringSlice(input []interface{}) []string {
 		}
 	}
 	return result
+}
+
+// genericFlowNames are CRUD-like flow names that are too generic to be useful
+// as standalone flow identifiers. When a more specific surface name exists,
+// these are demoted in favor of the surface.
+var genericFlowNames = map[string]bool{
+	"creation":  true, // "new" still maps to Flow "creation"
+	"retrieval": true,
+	"search":    true,
+	"filter":    true,
+	"sort":      true,
+}
+
+// allGenericFlows returns true if every flow name in the slice is a generic CRUD verb.
+func allGenericFlows(flows []string) bool {
+	for _, f := range flows {
+		if !genericFlowNames[f] {
+			return false
+		}
+	}
+	return true
 }

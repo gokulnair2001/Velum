@@ -164,13 +164,13 @@ func (s *InMemoryVocabStorage) GetVocabStats(ctx context.Context) (map[string]in
 }
 
 // LookupWord implements the eventadapter.VocabLookup interface.
-func (s *InMemoryVocabStorage) LookupWord(ctx context.Context, word string) (string, error) {
+func (s *InMemoryVocabStorage) LookupWord(ctx context.Context, word string) (string, string, error) {
 	entry, err := s.GetVocab(ctx, word)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if entry == nil {
-		return "", nil
+		return "", "", nil
 	}
-	return string(entry.Category), nil
+	return string(entry.Category), entry.Normalized, nil
 }

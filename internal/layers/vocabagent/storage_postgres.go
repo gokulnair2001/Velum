@@ -369,14 +369,14 @@ func (s *PostgresVocabStorage) GetVocabStats(ctx context.Context) (map[string]in
 }
 
 // LookupWord implements the eventadapter.VocabLookup interface.
-// Returns the category for a word, or empty string if not found.
-func (s *PostgresVocabStorage) LookupWord(ctx context.Context, word string) (string, error) {
+// Returns the category and normalized value for a word, or empty strings if not found.
+func (s *PostgresVocabStorage) LookupWord(ctx context.Context, word string) (string, string, error) {
 	entry, err := s.GetVocab(ctx, word)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if entry == nil {
-		return "", nil
+		return "", "", nil
 	}
-	return string(entry.Category), nil
+	return string(entry.Category), entry.Normalized, nil
 }

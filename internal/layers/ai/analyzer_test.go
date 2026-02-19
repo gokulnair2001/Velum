@@ -305,6 +305,18 @@ func TestParseAIResponse(t *testing.T) {
 			summary: "Test",
 		},
 		{
+			name:    "JSON with markdown code block and trailing commentary",
+			content: "```json\n{\"summary\": \"Parsed OK\", \"details\": [\"d1\"], \"hypotheses\": [], \"confidence_note\": \"Note\"}\n```\nNote: I followed the format and provided analysis.",
+			wantErr: false,
+			summary: "Parsed OK",
+		},
+		{
+			name:    "JSON with leading text and braces",
+			content: "Here is the analysis:\n{\"summary\": \"Extracted\", \"details\": [], \"hypotheses\": [], \"confidence_note\": \"n\"}",
+			wantErr: false,
+			summary: "Extracted",
+		},
+		{
 			name:    "invalid JSON - fallback",
 			content: "This is not JSON",
 			wantErr: false, // Should not error, just return raw content

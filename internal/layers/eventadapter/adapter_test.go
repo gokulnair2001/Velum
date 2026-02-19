@@ -78,8 +78,8 @@ func TestNormalizeEventString(t *testing.T) {
 		{
 			input:           "checkout_payment_failed",
 			expectedStatus:  []string{"failed"},
-			expectedSurface: []string{"checkout"},
-			expectedFlow:    []string{"payment"},
+			expectedSurface: []string{},
+			expectedFlow:    []string{"checkout", "payment"},
 		},
 		{
 			input:           "login_modal_view",
