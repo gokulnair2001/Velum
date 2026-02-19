@@ -4,7 +4,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/velum/internal/canonical"
 	"github.com/velum/internal/layers/baseline"
+	"github.com/velum/internal/layers/behavior"
+	"github.com/velum/internal/layers/pattern"
 )
 
 func TestAnalyzerName(t *testing.T) {
@@ -23,17 +26,17 @@ func TestAnalyzerDisabled(t *testing.T) {
 		DetectedPatterns: []string{"pattern1"},
 		ChangeResults: []*baseline.ChangeResult{
 			{
-				PatternType:        "retry",
-				Flow:               "payment",
-				CurrentImpactRatio: 0.35,
+				PatternType:         "retry",
+				Flow:                "payment",
+				CurrentImpactRatio:  0.35,
 				BaselineImpactRatio: 0.15,
-				Delta:              0.20,
-				DeltaPercentage:    1.33,
-				Trend:              baseline.TrendIncreasing,
-				ChangeSignificance: baseline.SignificanceHigh,
-				BaselineStatus:     baseline.BaselineStatusSufficient,
-				BaselineWindow:     "2026-01-07 to 2026-02-04",
-				BaselineDays:       28,
+				Delta:               0.20,
+				DeltaPercentage:     1.33,
+				Trend:               baseline.TrendIncreasing,
+				ChangeSignificance:  baseline.SignificanceHigh,
+				BaselineStatus:      baseline.BaselineStatusSufficient,
+				BaselineWindow:      "2026-01-07 to 2026-02-04",
+				BaselineDays:        28,
 			},
 		},
 		SnapshotDate: time.Now(),
@@ -104,19 +107,55 @@ func TestBuildUserPrompt(t *testing.T) {
 	analyzer := New()
 
 	baselineResult := &baseline.BaselineResult{
+		DetectedPatterns: []*pattern.DetectedPattern{
+			{
+				Pattern:       pattern.PatternRetryStorm,
+				Flow:          "payment",
+				ContextKey:    "error_code=card_declined,plan_name=premium",
+				AffectedUsers: 3,
+				TotalFlows:    5,
+				Severity:      pattern.SeverityHigh,
+				Confidence:    pattern.ConfidenceHigh,
+				Evidence: pattern.PatternEvidence{
+					MatchingFlows: 3,
+					Ratio:         0.60,
+					Description:   "3 of 5 flows show retry behavior",
+				},
+			},
+		},
+		AnalyzedFlows: []*behavior.AnalyzedFlow{
+			{UserID: "u1", Flow: "payment", Outcome: behavior.BehaviorRetry,
+				Context: &canonical.EventContext{
+					Dimensions: map[string]string{"device": "mobile", "country": "US"},
+					Conditions: map[string]interface{}{"error_code": "card_declined"},
+					Targets:    map[string]interface{}{"plan_name": "premium"},
+				}},
+			{UserID: "u2", Flow: "payment", Outcome: behavior.BehaviorRetry,
+				Context: &canonical.EventContext{
+					Dimensions: map[string]string{"device": "mobile", "country": "US"},
+					Conditions: map[string]interface{}{"error_code": "card_declined"},
+					Targets:    map[string]interface{}{"plan_name": "premium"},
+				}},
+			{UserID: "u3", Flow: "payment", Outcome: behavior.BehaviorSucceed,
+				Context: &canonical.EventContext{
+					Dimensions: map[string]string{"device": "desktop", "country": "UK"},
+					Targets:    map[string]interface{}{"plan_name": "free"},
+				}},
+		},
 		ChangeResults: []*baseline.ChangeResult{
 			{
-				PatternType:        "retry",
-				Flow:               "payment",
-				CurrentImpactRatio: 0.35,
+				PatternType:         "retry_storm",
+				Flow:                "payment",
+				ContextKey:          "error_code=card_declined,plan_name=premium",
+				CurrentImpactRatio:  0.35,
 				BaselineImpactRatio: 0.15,
-				Delta:              0.20,
-				DeltaPercentage:    1.33,
-				Trend:              baseline.TrendIncreasing,
-				ChangeSignificance: baseline.SignificanceHigh,
-				BaselineStatus:     baseline.BaselineStatusSufficient,
-				BaselineWindow:     "2026-01-07 to 2026-02-04",
-				BaselineDays:       28,
+				Delta:               0.20,
+				DeltaPercentage:     1.33,
+				Trend:               baseline.TrendIncreasing,
+				ChangeSignificance:  baseline.SignificanceHigh,
+				BaselineStatus:      baseline.BaselineStatusSufficient,
+				BaselineWindow:      "2026-01-07 to 2026-02-04",
+				BaselineDays:        28,
 			},
 		},
 	}
@@ -131,12 +170,111 @@ func TestBuildUserPrompt(t *testing.T) {
 		t.Error("Expected non-empty prompt")
 	}
 
-	if !contains(prompt, "retry") {
-		t.Error("Expected prompt to contain pattern type 'retry'")
+	if !contains(prompt, "retry_storm") {
+		t.Error("Expected prompt to contain pattern type 'retry_storm'")
 	}
 
 	if !contains(prompt, "payment") {
 		t.Error("Expected prompt to contain flow 'payment'")
+	}
+
+	if !contains(prompt, "error_code=card_declined,plan_name=premium") {
+		t.Error("Expected prompt to contain context_key")
+	}
+
+	if !contains(prompt, "Context:") {
+		t.Error("Expected prompt to contain 'Context:' label for context_key")
+	}
+
+	// Verify pattern evidence is included
+	if !contains(prompt, "Severity: high") {
+		t.Error("Expected prompt to contain severity")
+	}
+
+	if !contains(prompt, "Confidence: high") {
+		t.Error("Expected prompt to contain confidence")
+	}
+
+	if !contains(prompt, "Affected Users: 3 / 5") {
+		t.Error("Expected prompt to contain affected users count")
+	}
+
+	if !contains(prompt, "3 of 5 flows show retry behavior") {
+		t.Error("Expected prompt to contain evidence description")
+	}
+
+	// Verify context breakdown is included
+	if !contains(prompt, "Context Breakdown") {
+		t.Error("Expected prompt to contain context breakdown section")
+	}
+
+	if !contains(prompt, "device:") {
+		t.Error("Expected prompt to contain device breakdown")
+	}
+
+	if !contains(prompt, "mobile(2)") {
+		t.Error("Expected prompt to contain mobile count")
+	}
+
+	if !contains(prompt, "desktop(1)") {
+		t.Error("Expected prompt to contain desktop count")
+	}
+}
+
+func TestBuildUserPromptWithoutContext(t *testing.T) {
+	analyzer := New()
+
+	baselineResult := &baseline.BaselineResult{
+		DetectedPatterns: []*pattern.DetectedPattern{
+			{
+				Pattern:       pattern.PatternEarlyDropoff,
+				Flow:          "registration",
+				AffectedUsers: 4,
+				TotalFlows:    4,
+				Severity:      pattern.SeverityMedium,
+				Confidence:    pattern.ConfidenceMedium,
+				Evidence: pattern.PatternEvidence{
+					Ratio: 1.0,
+				},
+			},
+		},
+		AnalyzedFlows: []*behavior.AnalyzedFlow{
+			{UserID: "u1", Flow: "registration", Context: nil},
+		},
+		ChangeResults: []*baseline.ChangeResult{
+			{
+				PatternType:    "early_dropoff",
+				Flow:           "registration",
+				ContextKey:     "", // no context
+				BaselineStatus: baseline.BaselineStatusFirstObservation,
+			},
+		},
+	}
+
+	prompt, err := analyzer.buildUserPrompt(baselineResult)
+	if err != nil {
+		t.Fatalf("buildUserPrompt failed: %v", err)
+	}
+
+	if contains(prompt, "Context:") {
+		t.Error("Expected prompt to NOT contain 'Context:' label when context_key is empty")
+	}
+
+	if !contains(prompt, "early_dropoff") {
+		t.Error("Expected prompt to contain pattern type")
+	}
+
+	if !contains(prompt, "Baseline Available: false") {
+		t.Error("Expected prompt to indicate baseline not available for first observation")
+	}
+
+	// Pattern evidence should still be present
+	if !contains(prompt, "Severity: medium") {
+		t.Error("Expected prompt to contain severity even without context key")
+	}
+
+	if !contains(prompt, "Affected Users: 4 / 4") {
+		t.Error("Expected prompt to contain affected users info")
 	}
 }
 
@@ -144,10 +282,10 @@ func TestParseAIResponse(t *testing.T) {
 	analyzer := New()
 
 	tests := []struct {
-		name     string
-		content  string
-		wantErr  bool
-		summary  string
+		name    string
+		content string
+		wantErr bool
+		summary string
 	}{
 		{
 			name: "valid JSON",
@@ -161,10 +299,22 @@ func TestParseAIResponse(t *testing.T) {
 			summary: "Test summary",
 		},
 		{
-			name: "JSON with markdown code block",
+			name:    "JSON with markdown code block",
 			content: "```json\n{\"summary\": \"Test\", \"details\": [], \"hypotheses\": [], \"confidence_note\": \"Note\"}\n```",
 			wantErr: false,
 			summary: "Test",
+		},
+		{
+			name:    "JSON with markdown code block and trailing commentary",
+			content: "```json\n{\"summary\": \"Parsed OK\", \"details\": [\"d1\"], \"hypotheses\": [], \"confidence_note\": \"Note\"}\n```\nNote: I followed the format and provided analysis.",
+			wantErr: false,
+			summary: "Parsed OK",
+		},
+		{
+			name:    "JSON with leading text and braces",
+			content: "Here is the analysis:\n{\"summary\": \"Extracted\", \"details\": [], \"hypotheses\": [], \"confidence_note\": \"n\"}",
+			wantErr: false,
+			summary: "Extracted",
 		},
 		{
 			name:    "invalid JSON - fallback",

@@ -51,6 +51,12 @@ type AIResult struct {
 	// Change results from baseline comparison
 	ChangeResults []*baseline.ChangeResult `json:"change_results"`
 
+	// DetectedPatterns carries pattern evidence (severity, confidence, etc.)
+	DetectedPatterns interface{} `json:"detected_patterns,omitempty"`
+
+	// AnalyzedFlows carries per-flow context (dimensions, conditions, targets)
+	AnalyzedFlows interface{} `json:"analyzed_flows,omitempty"`
+
 	// AI analysis (only populated when AI is enabled)
 	AIAnalysis *AnalysisResponse `json:"ai_analysis,omitempty"`
 	AIEnabled  bool              `json:"ai_enabled"`

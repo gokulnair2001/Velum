@@ -59,19 +59,49 @@ go run cmd/velum/main.go
 # Health check
 curl http://localhost:8080/health
 
-# Send test events
+# Send test events (new format with properties)
 curl -X POST http://localhost:8080/api/v1/analyze \
   -H "Content-Type: application/json" \
   -d '{
     "events": [
-      {"id": "1", "event": "checkout_page_view", "ts": 1707500000000},
-      {"id": "2", "event": "checkout_scroll", "ts": 1707500015000},
-      {"id": "3", "event": "checkout_abandoned", "ts": 1707500045000}
+      {
+        "id": "1",
+        "event": "checkout_page_view",
+        "ts": 1707500000000,
+        "user_id": "usr-101",
+        "session_id": "sess-abc",
+        "device": "mobile",
+        "country": "US",
+        "plan_name": "premium"
+      },
+      {
+        "id": "2",
+        "event": "checkout_payment_click",
+        "ts": 1707500015000,
+        "user_id": "usr-101",
+        "session_id": "sess-abc",
+        "device": "mobile",
+        "country": "US",
+        "plan_name": "premium",
+        "cart_value": 120.50
+      },
+      {
+        "id": "3",
+        "event": "checkout_payment_failed",
+        "ts": 1707500045000,
+        "user_id": "usr-101",
+        "session_id": "sess-abc",
+        "device": "mobile",
+        "country": "US",
+        "error_code": "card_declined",
+        "plan_name": "premium",
+        "cart_value": 120.50
+      }
     ]
   }'
 ```
 
-🎉 **That's it!** You should see behavioral analysis detecting a silent abandonment pattern.
+🎉 **That's it!** You should see behavioral analysis detecting patterns with context-aware baselines (e.g., retry storms segmented by `error_code` and `plan_name`).
 
 ---
 
@@ -166,7 +196,21 @@ data_mapping:
 
 ### AI Features (Optional but Powerful)
 
-Velum has two AI-powered features. Both require a [Groq API key](https://console.groq.com/keys) (free tier available).
+Velum has three AI-powered features. All require a [Groq API key](https://console.groq.com/keys) (free tier available).
+
+#### Context Agent — Auto-classify Event Properties
+
+When Velum encounters unknown event properties (like `error_code`, `plan_name`), it classifies them as **target** or **condition** using AI. Once classified, these properties are used to build context-keyed baselines.
+
+```yaml
+context_agent:
+  enabled: true
+  provider: "groq"
+  api_key: "gsk_your_api_key_here"  # Or set VELUM_CONTEXT_AGENT_API_KEY env var
+  model: "llama-3.1-8b-instant"
+```
+
+> **Note:** Built-in dimensions (device, country, etc.) and numeric measures are resolved automatically without AI. The context agent only handles target vs condition classification.
 
 #### Vocab Agent — Auto-classify Unknown Words
 
@@ -297,19 +341,78 @@ curl -H "X-Infra-Key: your-api-key" http://localhost:8080/api/v1/analyze
       "event": "checkout_payment_click",
       "ts": 1707500000000,
       "user_id": "usr-123",
-      "session_id": "sess-abc"
+      "session_id": "sess-abc",
+      "device": "mobile",
+      "country": "US",
+      "plan_name": "premium",
+      "error_code": "card_declined",
+      "cart_value": 120.50
     }
   ]
 }
 ```
 
+#### Core Fields
+
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `id` | string | ✅ | Unique event ID |
-| `event` | string | ✅ | Event name |
-| `ts` | number/string | ✅ | Timestamp (epoch ms or ISO 8601) |
-| `user_id` | string | Recommended | User identifier |
+| `id` | string | ✅ Required | Unique event ID |
+| `event` | string | ✅ Required | Event name (e.g., `checkout_payment_click`) |
+| `ts` | number/string | ✅ Required | Timestamp (epoch ms or ISO 8601) |
+| `user_id` | string | ⚠️ Recommended | User identifier — needed for session grouping |
 | `session_id` | string | Optional | Session identifier |
+
+#### Context Properties
+
+Properties beyond the core fields are automatically classified into four roles and used to build **context-aware baselines**. For example, a retry storm on `checkout` for `error_code=card_declined` is tracked separately from one caused by `error_code=timeout`.
+
+| Role | How Resolved | Used In Context Key | Examples |
+|------|-------------|---------------------|----------|
+| **Dimension** | Built-in list (no AI) | ❌ | `device`, `country`, `platform`, `browser`, `channel` |
+| **Target** | AI classification | ✅ | `plan_name`, `product_id`, `feature_name` |
+| **Condition** | AI classification | ✅ | `error_code`, `ab_variant`, `retry_reason` |
+| **Measure** | Type inference (numeric) | ❌ | `cart_value`, `load_time_ms`, `retry_count` |
+
+> **Context Key**: Baselines are segmented by Targets + Conditions. Dimensions and Measures are tracked but don't split baselines.
+
+#### Recommended Properties
+
+For optimal behavioral analysis, include these properties with every event:
+
+| Property | Type | Role | Why It Matters |
+|----------|------|------|----------------|
+| `device` / `device_type` | string | Dimension | Mobile vs desktop behavior differs significantly |
+| `country` | string | Dimension | Regional patterns and latency differences |
+| `platform` | string | Dimension | OS-specific behavioral patterns |
+
+For richer context-aware baselines, also include domain-specific properties:
+
+| Property | Type | Role | Example Values |
+|----------|------|------|----------------|
+| `error_code` | string | Condition | `card_declined`, `timeout`, `rate_limited` |
+| `plan_name` | string | Target | `free`, `premium`, `enterprise` |
+| `product_id` | string | Target | `sku-123`, `plan-pro` |
+| `ab_variant` | string | Condition | `control`, `variant_a` |
+| `cart_value` | number | Measure | `49.99`, `120.50` |
+| `load_time_ms` | number | Measure | `340`, `1200` |
+
+#### Built-in Dimensions (Full List)
+
+These fields are automatically recognized as dimensions without AI:
+
+| Category | Accepted Field Names |
+|----------|---------------------|
+| **Device** | `device`, `device_type`, `deviceType`, `device_model`, `deviceModel` |
+| **Platform/OS** | `platform`, `os`, `os_name`, `osName`, `os_version`, `osVersion` |
+| **Browser** | `browser`, `browser_name`, `browserName`, `browser_version`, `browserVersion` |
+| **Geography** | `country`, `region`, `city`, `locale`, `timezone`, `tz` |
+| **App Version** | `app_version`, `appVersion`, `build`, `build_version`, `version` |
+| **Attribution** | `channel`, `source`, `medium`, `utm_source`, `utm_medium`, `utm_campaign`, `referrer` |
+| **Environment** | `environment`, `env` |
+| **Network** | `network_type`, `networkType`, `connection_type`, `connectionType` |
+| **Screen** | `screen_resolution`, `viewport` |
+| **Language** | `language`, `lang` |
+| **User Segment** | `user_type`, `userType`, `user_role`, `userRole`, `user_segment`, `userSegment` |
 
 **With data mapping enabled:** Send events in your own format — Velum transforms them automatically.
 
@@ -331,17 +434,20 @@ Velum parses multiple formats:
 Velum processes events through a layered pipeline:
 
 ```
-Raw Events → [Data Mapper] → Event Adapter → Session Flow → Behavior Analyzer → Pattern Detector → Baseline
+Raw Events → [Data Mapper] → Context Enricher → Vocab Enricher → Event Adapter → Session Flow → Behavior Analyzer → Pattern Detector → Baseline → [AI Analyzer]
 ```
 
 | Layer | What It Does |
 |-------|--------------|
 | **Data Mapper** | Transforms your event format to Velum's format (optional) |
-| **Event Adapter** | Tokenizes event names → `{status, surface, flow}` |
+| **Context Enricher** | Discovers unknown properties and classifies via AI (learn-only) |
+| **Vocab Enricher** | Auto-classifies unknown event name tokens via AI (learn-only) |
+| **Event Adapter** | Tokenizes event names → `{status, surface, flow}` + builds context from property registry |
 | **Session Flow** | Groups events by user/session into journeys |
 | **Behavior Analyzer** | Detects hesitation, retries, abandonment |
-| **Pattern Detector** | Aggregates behaviors into patterns |
-| **Baseline** | Compares against historical data |
+| **Pattern Detector** | Aggregates behaviors into context-keyed patterns |
+| **Baseline** | Compares against historical data, segmented by context key |
+| **AI Analyzer** | Generates natural language summaries (optional) |
 
 ### Detected Patterns
 
@@ -389,6 +495,7 @@ Override config values with environment variables:
 | `VELUM_ENV` | `server.environment` | Environment mode |
 | `VELUM_AI_API_KEY` | `ai_analyzer.api_key` | AI analyzer API key |
 | `VELUM_VOCAB_AGENT_API_KEY` | `vocab_agent.api_key` | Vocab agent API key |
+| `VELUM_CONTEXT_AGENT_API_KEY` | `context_agent.api_key` | Context agent API key |
 
 ```bash
 # Example: Run with custom port and AI key

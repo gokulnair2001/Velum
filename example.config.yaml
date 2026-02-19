@@ -100,6 +100,26 @@ vocab_agent:
   # Model to use for word classification
   model: "llama-3.1-8b-instant"
 
+# Context Agent Layer configuration (classifies event properties into target/condition)
+context_agent:
+  # Enable or disable context agent for automatic property classification
+  # When enabled, unknown string properties in events are classified by AI as target or condition
+  # These classifications drive context-keyed baselines (e.g., retry_storm tracked per error_code)
+  enabled: false
+  # Classified properties are stored in the configured PostgreSQL database (property_registry table)
+  # Built-in dimensions (device, country, etc.) and numeric measures are resolved without AI
+  # Only target vs condition classification requires AI
+  
+  # AI provider: "groq" (more providers coming soon)
+  provider: "groq"
+  
+  # API key for the AI provider
+  # Can also be set via VELUM_CONTEXT_AGENT_API_KEY environment variable
+  api_key: "your-groq-api-key-here"
+  
+  # Model to use for property classification
+  model: "llama-3.1-8b-instant"
+
 # Resiliency configuration
 resiliency:
   # Rate limiting: max requests per second (protects against DDoS and memory exhaustion)

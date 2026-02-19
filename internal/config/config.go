@@ -9,15 +9,16 @@ import (
 
 // Config holds application configuration
 type Config struct {
-	Server      ServerConfig      `yaml:"server"`
-	CORS        CORSConfig        `yaml:"cors"`
-	Resiliency  ResiliencyConfig  `yaml:"resiliency"`
-	Storage     StorageConfig     `yaml:"storage"`
-	Baseline    BaselineConfig    `yaml:"baseline"`
-	AIAnalyzer  AIAnalyzerConfig  `yaml:"ai_analyzer"`
-	VocabAgent  VocabAgentConfig  `yaml:"vocab_agent"`
-	Security    SecurityConfig    `yaml:"security"`
-	DataMapping DataMappingConfig `yaml:"data_mapping"`
+	Server       ServerConfig       `yaml:"server"`
+	CORS         CORSConfig         `yaml:"cors"`
+	Resiliency   ResiliencyConfig   `yaml:"resiliency"`
+	Storage      StorageConfig      `yaml:"storage"`
+	Baseline     BaselineConfig     `yaml:"baseline"`
+	AIAnalyzer   AIAnalyzerConfig   `yaml:"ai_analyzer"`
+	VocabAgent   VocabAgentConfig   `yaml:"vocab_agent"`
+	ContextAgent ContextAgentConfig `yaml:"context_agent"`
+	Security     SecurityConfig     `yaml:"security"`
+	DataMapping  DataMappingConfig  `yaml:"data_mapping"`
 }
 
 // DataMappingConfig holds declarative data mapping configuration
@@ -111,6 +112,14 @@ type VocabAgentConfig struct {
 	Model    string `yaml:"model"`
 }
 
+// ContextAgentConfig holds context agent configuration (for classifying event properties)
+type ContextAgentConfig struct {
+	Enabled  bool   `yaml:"enabled"`
+	Provider string `yaml:"provider"`
+	APIKey   string `yaml:"api_key"`
+	Model    string `yaml:"model"`
+}
+
 // SecurityConfig holds security-related configuration
 type SecurityConfig struct {
 	Enabled    bool   `yaml:"enabled"`
@@ -161,6 +170,12 @@ func DefaultConfig() *Config {
 			Model:    "llama-3.1-8b-instant",
 		},
 		VocabAgent: VocabAgentConfig{
+			Enabled:  false,
+			Provider: "groq",
+			APIKey:   "",
+			Model:    "llama-3.1-8b-instant",
+		},
+		ContextAgent: ContextAgentConfig{
 			Enabled:  false,
 			Provider: "groq",
 			APIKey:   "",
@@ -218,6 +233,9 @@ func Load() *Config {
 	}
 	if vocabKey := os.Getenv("VELUM_VOCAB_AGENT_API_KEY"); vocabKey != "" {
 		cfg.VocabAgent.APIKey = vocabKey
+	}
+	if ctxKey := os.Getenv("VELUM_CONTEXT_AGENT_API_KEY"); ctxKey != "" {
+		cfg.ContextAgent.APIKey = ctxKey
 	}
 
 	return cfg

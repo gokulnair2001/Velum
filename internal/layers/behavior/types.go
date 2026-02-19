@@ -26,9 +26,9 @@ var BehaviorPriority = map[BehaviorType]int{
 
 // BehaviorEvent represents a behavior occurrence within a flow
 type BehaviorEvent struct {
-	Behavior  BehaviorType `json:"behavior"`
-	EventIndex int         `json:"event_index"` // Index of the event that triggered this behavior
-	Reason    string       `json:"reason"`      // Explanation for the behavior
+	Behavior   BehaviorType `json:"behavior"`
+	EventIndex int          `json:"event_index"` // Index of the event that triggered this behavior
+	Reason     string       `json:"reason"`      // Explanation for the behavior
 }
 
 // Config holds configuration for behavior detection
@@ -56,14 +56,29 @@ type Config struct {
 func DefaultConfig() *Config {
 	return &Config{
 		ActionStatuses: map[string]bool{
-			"click":   true,
-			"submit":  true,
-			"confirm": true,
-			"select":  true,
+			"click":    true,
+			"submit":   true,
+			"confirm":  true,
+			"select":   true,
+			"attempt":  true,
+			"apply":    true,
+			"request":  true,
+			"scroll":   true,
+			"swipe":    true,
+			"add":      true,
+			"create":   true,
+			"remove":   true,
+			"update":   true,
+			"save":     true,
+			"upload":   true,
+			"download": true,
+			"share":    true,
+			"export":   true,
 		},
 		EntryStatuses: map[string]bool{
 			"view":  true,
 			"start": true,
+			"open":  true,
 		},
 		ErrorStatuses: map[string]bool{
 			"error":  true,

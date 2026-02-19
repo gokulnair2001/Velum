@@ -1,6 +1,11 @@
 package pattern
 
 import (
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/velum/internal/canonical"
 	"github.com/velum/internal/layers/behavior"
 )
 
@@ -56,34 +61,39 @@ func (d *Detector) detectPatterns(flows []*behavior.AnalyzedFlow) []*DetectedPat
 	var detectedPatterns []*DetectedPattern
 
 	for flowName, group := range grouped {
-		// Skip if below minimum sample size
-		if len(group) < d.config.MinSampleSize {
-			continue
-		}
+		// Sub-group by context key for context-keyed baselines
+		subGroups := d.groupByContextKey(group)
 
-		// Check each pattern type
-		if pattern := d.detectRetryStorm(flowName, group); pattern != nil {
-			detectedPatterns = append(detectedPatterns, pattern)
-		}
+		for contextKey, subGroup := range subGroups {
+			// Skip if below minimum sample size
+			if len(subGroup) < d.config.MinSampleSize {
+				continue
+			}
 
-		if pattern := d.detectConfusionLoop(flowName, group); pattern != nil {
-			detectedPatterns = append(detectedPatterns, pattern)
-		}
+			// Check each pattern type
+			if pattern := d.detectRetryStorm(flowName, contextKey, subGroup); pattern != nil {
+				detectedPatterns = append(detectedPatterns, pattern)
+			}
 
-		if pattern := d.detectSilentAbandonment(flowName, group); pattern != nil {
-			detectedPatterns = append(detectedPatterns, pattern)
-		}
+			if pattern := d.detectConfusionLoop(flowName, contextKey, subGroup); pattern != nil {
+				detectedPatterns = append(detectedPatterns, pattern)
+			}
 
-		if pattern := d.detectEarlyDropoff(flowName, group); pattern != nil {
-			detectedPatterns = append(detectedPatterns, pattern)
-		}
+			if pattern := d.detectSilentAbandonment(flowName, contextKey, subGroup); pattern != nil {
+				detectedPatterns = append(detectedPatterns, pattern)
+			}
 
-		if pattern := d.detectBypassBehavior(flowName, group); pattern != nil {
-			detectedPatterns = append(detectedPatterns, pattern)
-		}
+			if pattern := d.detectEarlyDropoff(flowName, contextKey, subGroup); pattern != nil {
+				detectedPatterns = append(detectedPatterns, pattern)
+			}
 
-		if pattern := d.detectMaskedFailure(flowName, group); pattern != nil {
-			detectedPatterns = append(detectedPatterns, pattern)
+			if pattern := d.detectBypassBehavior(flowName, contextKey, subGroup); pattern != nil {
+				detectedPatterns = append(detectedPatterns, pattern)
+			}
+
+			if pattern := d.detectMaskedFailure(flowName, contextKey, subGroup); pattern != nil {
+				detectedPatterns = append(detectedPatterns, pattern)
+			}
 		}
 	}
 
@@ -99,9 +109,67 @@ func (d *Detector) groupByFlow(flows []*behavior.AnalyzedFlow) map[string][]*beh
 	return grouped
 }
 
+// groupByContextKey sub-groups flows by their derived context key.
+// Always includes a global group (empty key "") containing ALL flows so that
+// patterns are detectable even when context-specific sub-groups are too small.
+// Context-keyed groups are only included when they have enough samples.
+func (d *Detector) groupByContextKey(flows []*behavior.AnalyzedFlow) map[string][]*behavior.AnalyzedFlow {
+	grouped := make(map[string][]*behavior.AnalyzedFlow)
+
+	// Always include the global (empty key) group with ALL flows
+	grouped[""] = flows
+
+	// Also create per-context sub-groups
+	for _, flow := range flows {
+		key := deriveContextKey(flow.Context)
+		if key != "" {
+			grouped[key] = append(grouped[key], flow)
+		}
+	}
+	return grouped
+}
+
+// deriveContextKey builds a context key from an EventContext.
+// Priority: conditions first (sorted), then targets (sorted).
+// Format: "key1=val1,key2=val2" — deterministic and human-readable.
+// Returns empty string if no conditions or targets exist.
+func deriveContextKey(ctx *canonical.EventContext) string {
+	if ctx == nil {
+		return ""
+	}
+
+	var parts []string
+
+	// Conditions take priority — they explain "why" the pattern occurred
+	if len(ctx.Conditions) > 0 {
+		keys := make([]string, 0, len(ctx.Conditions))
+		for k := range ctx.Conditions {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			parts = append(parts, fmt.Sprintf("%s=%v", k, ctx.Conditions[k]))
+		}
+	}
+
+	// Targets explain "what" the action was about
+	if len(ctx.Targets) > 0 {
+		keys := make([]string, 0, len(ctx.Targets))
+		for k := range ctx.Targets {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			parts = append(parts, fmt.Sprintf("%s=%v", k, ctx.Targets[k]))
+		}
+	}
+
+	return strings.Join(parts, ",")
+}
+
 // detectRetryStorm checks for high frequency of retries
 // Pattern: >= 30% of flows have retry behavior
-func (d *Detector) detectRetryStorm(flowName string, group []*behavior.AnalyzedFlow) *DetectedPattern {
+func (d *Detector) detectRetryStorm(flowName, contextKey string, group []*behavior.AnalyzedFlow) *DetectedPattern {
 	retryCount := 0
 	var sampleIDs []string
 
@@ -120,6 +188,7 @@ func (d *Detector) detectRetryStorm(flowName string, group []*behavior.AnalyzedF
 		return d.buildPattern(
 			PatternRetryStorm,
 			flowName,
+			contextKey,
 			group,
 			retryCount,
 			ratio,
@@ -133,7 +202,7 @@ func (d *Detector) detectRetryStorm(flowName string, group []*behavior.AnalyzedF
 
 // detectConfusionLoop checks for high frequency of hesitation
 // Pattern: >= 30% of flows have hesitate behavior
-func (d *Detector) detectConfusionLoop(flowName string, group []*behavior.AnalyzedFlow) *DetectedPattern {
+func (d *Detector) detectConfusionLoop(flowName, contextKey string, group []*behavior.AnalyzedFlow) *DetectedPattern {
 	hesitateCount := 0
 	var sampleIDs []string
 
@@ -152,6 +221,7 @@ func (d *Detector) detectConfusionLoop(flowName string, group []*behavior.Analyz
 		return d.buildPattern(
 			PatternConfusionLoop,
 			flowName,
+			contextKey,
 			group,
 			hesitateCount,
 			ratio,
@@ -165,7 +235,7 @@ func (d *Detector) detectConfusionLoop(flowName string, group []*behavior.Analyz
 
 // detectSilentAbandonment checks for abandons without errors or retries
 // Pattern: Abandon without any retry attempts
-func (d *Detector) detectSilentAbandonment(flowName string, group []*behavior.AnalyzedFlow) *DetectedPattern {
+func (d *Detector) detectSilentAbandonment(flowName, contextKey string, group []*behavior.AnalyzedFlow) *DetectedPattern {
 	silentAbandonCount := 0
 	var sampleIDs []string
 
@@ -186,6 +256,7 @@ func (d *Detector) detectSilentAbandonment(flowName string, group []*behavior.An
 		return d.buildPattern(
 			PatternSilentAbandonment,
 			flowName,
+			contextKey,
 			group,
 			silentAbandonCount,
 			ratio,
@@ -199,7 +270,7 @@ func (d *Detector) detectSilentAbandonment(flowName string, group []*behavior.An
 
 // detectEarlyDropoff checks for users who explore but immediately abandon
 // Pattern: >= 40% of flows have only explore + abandon behaviors
-func (d *Detector) detectEarlyDropoff(flowName string, group []*behavior.AnalyzedFlow) *DetectedPattern {
+func (d *Detector) detectEarlyDropoff(flowName, contextKey string, group []*behavior.AnalyzedFlow) *DetectedPattern {
 	earlyDropoffCount := 0
 	var sampleIDs []string
 
@@ -226,6 +297,7 @@ func (d *Detector) detectEarlyDropoff(flowName string, group []*behavior.Analyze
 		return d.buildPattern(
 			PatternEarlyDropoff,
 			flowName,
+			contextKey,
 			group,
 			earlyDropoffCount,
 			ratio,
@@ -239,7 +311,7 @@ func (d *Detector) detectEarlyDropoff(flowName string, group []*behavior.Analyze
 
 // detectBypassBehavior checks for flows that skip expected entry points
 // Pattern: Flows with bypass behavior
-func (d *Detector) detectBypassBehavior(flowName string, group []*behavior.AnalyzedFlow) *DetectedPattern {
+func (d *Detector) detectBypassBehavior(flowName, contextKey string, group []*behavior.AnalyzedFlow) *DetectedPattern {
 	bypassCount := 0
 	var sampleIDs []string
 
@@ -257,6 +329,7 @@ func (d *Detector) detectBypassBehavior(flowName string, group []*behavior.Analy
 		return d.buildPattern(
 			PatternBypassBehavior,
 			flowName,
+			contextKey,
 			group,
 			bypassCount,
 			ratio,
@@ -270,7 +343,7 @@ func (d *Detector) detectBypassBehavior(flowName string, group []*behavior.Analy
 
 // detectMaskedFailure checks for flows with retries that eventually succeed
 // Pattern: Retry + Success indicates hidden failures that users overcome
-func (d *Detector) detectMaskedFailure(flowName string, group []*behavior.AnalyzedFlow) *DetectedPattern {
+func (d *Detector) detectMaskedFailure(flowName, contextKey string, group []*behavior.AnalyzedFlow) *DetectedPattern {
 	maskedFailureCount := 0
 	var sampleIDs []string
 
@@ -291,6 +364,7 @@ func (d *Detector) detectMaskedFailure(flowName string, group []*behavior.Analyz
 		return d.buildPattern(
 			PatternMaskedFailure,
 			flowName,
+			contextKey,
 			group,
 			maskedFailureCount,
 			ratio,
@@ -306,6 +380,7 @@ func (d *Detector) detectMaskedFailure(flowName string, group []*behavior.Analyz
 func (d *Detector) buildPattern(
 	patternType PatternType,
 	flowName string,
+	contextKey string,
 	group []*behavior.AnalyzedFlow,
 	matchingFlows int,
 	ratio float64,
@@ -313,10 +388,11 @@ func (d *Detector) buildPattern(
 	sampleIDs []string,
 ) *DetectedPattern {
 	affectedUsers := d.countUniqueUsers(group)
-	
+
 	return &DetectedPattern{
 		Pattern:       patternType,
 		Flow:          flowName,
+		ContextKey:    contextKey,
 		AffectedUsers: affectedUsers,
 		TotalFlows:    len(group),
 		Severity:      d.computeSeverity(affectedUsers),
@@ -363,7 +439,7 @@ func (d *Detector) computeConfidence(group []*behavior.AnalyzedFlow) Confidence 
 	if mediumCount == len(group) {
 		return ConfidenceHigh
 	}
-	
+
 	// If majority have medium confidence
 	if float64(mediumCount)/float64(len(group)) >= 0.5 {
 		return ConfidenceMedium

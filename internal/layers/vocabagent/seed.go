@@ -9,22 +9,9 @@ import (
 
 // SeedBuiltinVocabulary seeds the storage with built-in vocabulary from eventadapter.
 // This should be called once on server startup.
-// It checks if vocabulary already exists and only seeds if empty (idempotent).
+// It performs an incremental upsert — new builtin words are added and existing
+// builtin words are updated, while AI-learned words are left untouched.
 func SeedBuiltinVocabulary(ctx context.Context, storage VocabStorage) error {
-	// Check if vocabulary is already seeded
-	stats, ok := storage.(VocabStats)
-	if ok {
-		vocabStats, err := stats.GetVocabStats(ctx)
-		if err == nil {
-			if totalEntries, exists := vocabStats["total_entries"]; exists {
-				if count, ok := totalEntries.(int); ok && count > 0 {
-					fmt.Printf("Vocabulary already seeded (%d entries), skipping\n", count)
-					return nil
-				}
-			}
-		}
-	}
-
 	// Get the built-in vocabulary
 	vocab := eventadapter.NewVocabulary()
 
@@ -61,7 +48,7 @@ func SeedBuiltinVocabulary(ctx context.Context, storage VocabStorage) error {
 		})
 	}
 
-	// Batch upsert all entries
+	// Batch upsert all entries (ON CONFLICT updates builtin entries)
 	if err := storage.UpsertVocabBatch(ctx, entries); err != nil {
 		return fmt.Errorf("failed to seed vocabulary: %w", err)
 	}

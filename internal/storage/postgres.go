@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/velum/internal/config"
 	_ "github.com/lib/pq"
+	"github.com/velum/internal/config"
 )
 
 // PostgresStorage implements Storage interface with PostgreSQL persistence
@@ -73,6 +73,7 @@ func (s *PostgresStorage) initSchema() error {
 			date DATE NOT NULL,
 			pattern_type TEXT NOT NULL,
 			flow TEXT NOT NULL,
+			context_key TEXT NOT NULL DEFAULT '',
 
 			affected_users INTEGER NOT NULL,
 			total_flows INTEGER NOT NULL,
@@ -84,11 +85,11 @@ func (s *PostgresStorage) initSchema() error {
 
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
-			PRIMARY KEY (date, pattern_type, flow)
+			PRIMARY KEY (date, pattern_type, flow, context_key)
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_pattern_snapshots_lookup 
-		ON pattern_snapshots (pattern_type, flow, date);
+		ON pattern_snapshots (pattern_type, flow, context_key, date);
 	`
 
 	_, err := s.db.Exec(schema)
@@ -102,6 +103,7 @@ func (s *PostgresStorage) StoreSnapshot(ctx context.Context, snapshot *PatternSn
 			date,
 			pattern_type,
 			flow,
+			context_key,
 			affected_users,
 			total_flows,
 			impact_ratio,
@@ -109,8 +111,8 @@ func (s *PostgresStorage) StoreSnapshot(ctx context.Context, snapshot *PatternSn
 			confidence,
 			pattern_version
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		ON CONFLICT(date, pattern_type, flow)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		ON CONFLICT(date, pattern_type, flow, context_key)
 		DO UPDATE SET
 			affected_users = EXCLUDED.affected_users,
 			total_flows = EXCLUDED.total_flows,
@@ -126,6 +128,7 @@ func (s *PostgresStorage) StoreSnapshot(ctx context.Context, snapshot *PatternSn
 		dateStr,
 		snapshot.PatternType,
 		snapshot.Flow,
+		snapshot.ContextKey,
 		snapshot.AffectedUsers,
 		snapshot.TotalFlows,
 		snapshot.ImpactRatio,
@@ -140,7 +143,7 @@ func (s *PostgresStorage) StoreSnapshot(ctx context.Context, snapshot *PatternSn
 // FetchBaselineSnapshots retrieves historical snapshots for baseline computation
 func (s *PostgresStorage) FetchBaselineSnapshots(
 	ctx context.Context,
-	patternType, flow string,
+	patternType, flow, contextKey string,
 	endDate time.Time,
 	windowDays int,
 ) ([]*PatternSnapshot, error) {
@@ -153,6 +156,7 @@ func (s *PostgresStorage) FetchBaselineSnapshots(
 			date,
 			pattern_type,
 			flow,
+			context_key,
 			affected_users,
 			total_flows,
 			impact_ratio,
@@ -162,8 +166,9 @@ func (s *PostgresStorage) FetchBaselineSnapshots(
 		FROM pattern_snapshots
 		WHERE pattern_type = $1
 		  AND flow = $2
-		  AND date >= $3
-		  AND date <= $4
+		  AND context_key = $3
+		  AND date >= $4
+		  AND date <= $5
 		ORDER BY date ASC
 	`
 
@@ -173,6 +178,7 @@ func (s *PostgresStorage) FetchBaselineSnapshots(
 	rows, err := s.db.QueryContext(ctx, query,
 		patternType,
 		flow,
+		contextKey,
 		startDateStr,
 		endDateStr,
 	)
@@ -191,6 +197,7 @@ func (s *PostgresStorage) FetchBaselineSnapshots(
 			&dateStr,
 			&snap.PatternType,
 			&snap.Flow,
+			&snap.ContextKey,
 			&snap.AffectedUsers,
 			&snap.TotalFlows,
 			&snap.ImpactRatio,

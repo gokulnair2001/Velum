@@ -22,7 +22,7 @@ type Detector struct {
 	config  *Config
 	storage storage.Storage
 
-	// Cache for baseline stats, keyed by "patternType:flow"
+	// Cache for baseline stats, keyed by "patternType:flow:contextKey"
 	statsCache map[string]*cachedBaselineStats
 	cacheMu    sync.RWMutex
 }
@@ -167,6 +167,7 @@ func (d *Detector) markOutOfWindow(snapshot *storage.PatternSnapshot) *ChangeRes
 	return &ChangeResult{
 		PatternType:         snapshot.PatternType,
 		Flow:                snapshot.Flow,
+		ContextKey:          snapshot.ContextKey,
 		CurrentImpactRatio:  snapshot.ImpactRatio,
 		BaselineImpactRatio: 0,
 		Delta:               0,
@@ -184,6 +185,7 @@ func (d *Detector) createSnapshot(dp *pattern.DetectedPattern, date time.Time) *
 	return &storage.PatternSnapshot{
 		PatternType:    string(dp.Pattern),
 		Flow:           dp.Flow,
+		ContextKey:     dp.ContextKey,
 		ImpactRatio:    dp.Evidence.Ratio,
 		AffectedUsers:  dp.AffectedUsers,
 		TotalFlows:     dp.TotalFlows,
@@ -193,17 +195,17 @@ func (d *Detector) createSnapshot(dp *pattern.DetectedPattern, date time.Time) *
 	}
 }
 
-// cacheKey generates a cache key for a pattern+flow combination
-func cacheKey(patternType, flow string) string {
-	return patternType + ":" + flow
+// cacheKey generates a cache key for a pattern+flow+context combination
+func cacheKey(patternType, flow, contextKey string) string {
+	return patternType + ":" + flow + ":" + contextKey
 }
 
 // getCachedStats returns cached baseline stats if valid for today, otherwise nil
-func (d *Detector) getCachedStats(patternType, flow string, today time.Time) *BaselineStats {
+func (d *Detector) getCachedStats(patternType, flow, contextKey string, today time.Time) *BaselineStats {
 	d.cacheMu.RLock()
 	defer d.cacheMu.RUnlock()
 
-	key := cacheKey(patternType, flow)
+	key := cacheKey(patternType, flow, contextKey)
 	cached, exists := d.statsCache[key]
 	if !exists {
 		return nil
@@ -218,11 +220,11 @@ func (d *Detector) getCachedStats(patternType, flow string, today time.Time) *Ba
 }
 
 // setCachedStats stores baseline stats in cache
-func (d *Detector) setCachedStats(patternType, flow string, stats *BaselineStats, today time.Time) {
+func (d *Detector) setCachedStats(patternType, flow, contextKey string, stats *BaselineStats, today time.Time) {
 	d.cacheMu.Lock()
 	defer d.cacheMu.Unlock()
 
-	key := cacheKey(patternType, flow)
+	key := cacheKey(patternType, flow, contextKey)
 	d.statsCache[key] = &cachedBaselineStats{
 		stats:     stats,
 		cachedFor: today,
@@ -236,7 +238,7 @@ func (d *Detector) analyzePatternChange(ctx context.Context, currentSnapshot *st
 	// Check computation mode - use cache only in "daily" mode
 	if d.config.ComputationMode == "daily" {
 		// Try to get cached baseline stats first
-		if cachedStats := d.getCachedStats(currentSnapshot.PatternType, currentSnapshot.Flow, today); cachedStats != nil {
+		if cachedStats := d.getCachedStats(currentSnapshot.PatternType, currentSnapshot.Flow, currentSnapshot.ContextKey, today); cachedStats != nil {
 			// Use cached stats - no need to fetch from storage
 			if cachedStats.Count < d.config.MinBaselineDays {
 				status := BaselineStatusInsufficient
@@ -254,6 +256,7 @@ func (d *Detector) analyzePatternChange(ctx context.Context, currentSnapshot *st
 		ctx,
 		currentSnapshot.PatternType,
 		currentSnapshot.Flow,
+		currentSnapshot.ContextKey,
 		currentSnapshot.Date,
 		d.config.BaselineWindowDays,
 	)
@@ -268,7 +271,7 @@ func (d *Detector) analyzePatternChange(ctx context.Context, currentSnapshot *st
 
 	// Cache the computed stats for today (only in "daily" mode)
 	if d.config.ComputationMode == "daily" {
-		d.setCachedStats(currentSnapshot.PatternType, currentSnapshot.Flow, baselineStats, today)
+		d.setCachedStats(currentSnapshot.PatternType, currentSnapshot.Flow, currentSnapshot.ContextKey, baselineStats, today)
 	}
 
 	// Check for cold start / insufficient data
@@ -289,6 +292,7 @@ func (d *Detector) markInsufficientBaseline(snapshot *storage.PatternSnapshot, s
 	return &ChangeResult{
 		PatternType:         snapshot.PatternType,
 		Flow:                snapshot.Flow,
+		ContextKey:          snapshot.ContextKey,
 		CurrentImpactRatio:  snapshot.ImpactRatio,
 		BaselineImpactRatio: 0,
 		Delta:               0,
@@ -353,6 +357,7 @@ func (d *Detector) compareWithBaseline(current *storage.PatternSnapshot, baselin
 	return &ChangeResult{
 		PatternType:         current.PatternType,
 		Flow:                current.Flow,
+		ContextKey:          current.ContextKey,
 		CurrentImpactRatio:  current.ImpactRatio,
 		BaselineImpactRatio: baseline.Average,
 		Delta:               delta,

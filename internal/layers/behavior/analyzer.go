@@ -3,6 +3,7 @@ package behavior
 import (
 	"time"
 
+	"github.com/velum/internal/canonical"
 	"github.com/velum/internal/layers/sessionflow"
 )
 
@@ -39,11 +40,14 @@ type AnalyzedFlow struct {
 	Confidence     string                  `json:"confidence"`
 	Behaviors      []BehaviorType          `json:"behaviors"`       // Ordered list of detected behaviors
 	BehaviorDetail []BehaviorEvent         `json:"behavior_detail"` // Detailed behavior events
-	Outcome        BehaviorType            `json:"outcome"`          // Highest priority behavior (final outcome)
+	Outcome        BehaviorType            `json:"outcome"`         // Highest priority behavior (final outcome)
 	Events         []sessionflow.FlowEvent `json:"events"`
 	StartTime      time.Time               `json:"start_time"`
 	EndTime        time.Time               `json:"end_time,omitempty"`
 	IsComplete     bool                    `json:"is_complete"`
+
+	// Context is the merged canonical context from the flow instance.
+	Context *canonical.EventContext `json:"context,omitempty"`
 }
 
 // Process implements the Layer interface
@@ -77,6 +81,7 @@ func (a *Analyzer) analyzeFlow(flow *sessionflow.FlowInstance) *AnalyzedFlow {
 		StartTime:      flow.StartTime,
 		EndTime:        flow.EndTime,
 		IsComplete:     flow.IsComplete,
+		Context:        flow.Context,
 		Behaviors:      make([]BehaviorType, 0),
 		BehaviorDetail: make([]BehaviorEvent, 0),
 	}

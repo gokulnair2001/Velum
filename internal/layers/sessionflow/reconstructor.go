@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/velum/internal/canonical"
 	"github.com/velum/internal/layers/eventadapter"
 )
 
@@ -65,8 +66,9 @@ func (r *Reconstructor) reconstructFromProcessedEvents(events []*eventadapter.Pr
 		}
 
 		input := &NormalizedEventInput{
-			Event:  pe.Event,
+			Event:    pe.Event,
 			Original: pe.OriginalFields,
+			Context:  pe.Context,
 			Normalized: &NormalizedData{
 				Original:      pe.Normalized.Original,
 				Tokens:        pe.Normalized.Tokens,
@@ -217,9 +219,28 @@ func (r *Reconstructor) sortByTimestamp(events []*NormalizedEventInput) {
 	})
 }
 
-// parseTimestamp parses ISO 8601 timestamp
+// parseTimestamp parses various timestamp formats including epoch milliseconds,
+// epoch seconds, and ISO 8601 strings.
 func (r *Reconstructor) parseTimestamp(ts string) time.Time {
-	// Try common formats
+	// Try parsing as a numeric epoch timestamp first.
+	// JSON numbers decoded into map[string]interface{} become float64,
+	// which fmt.Sprintf("%v", ...) renders as scientific notation (e.g., "1.7075e+12").
+	// strconv.ParseFloat handles both "1707500000000" and "1.7075e+12".
+	if epochVal, err := strconv.ParseFloat(ts, 64); err == nil && epochVal > 0 {
+		epochInt := int64(epochVal)
+		if epochInt > 1e15 {
+			// Microseconds (e.g., 1707500000000000)
+			return time.Unix(0, epochInt*int64(time.Microsecond)).UTC()
+		} else if epochInt > 1e12 {
+			// Milliseconds (e.g., 1707500000000)
+			return time.Unix(0, epochInt*int64(time.Millisecond)).UTC()
+		} else if epochInt > 1e9 {
+			// Seconds (e.g., 1707500000)
+			return time.Unix(epochInt, 0).UTC()
+		}
+	}
+
+	// Try common ISO 8601 string formats
 	formats := []string{
 		time.RFC3339,
 		time.RFC3339Nano,
@@ -253,9 +274,22 @@ func (r *Reconstructor) reconstructUserFlows(userID string, events []*Normalized
 		statuses := event.Normalized.Status
 		surfaces := event.Normalized.Surface
 
-		// If no flow detected, use "unknown"
-		if len(flowNames) == 0 {
-			flowNames = []string{"unknown"}
+		// If no flow detected, use surface as a fallback flow name.
+		// This turns events like "restaurant_list_view" into flow "restaurant"
+		// instead of lumping everything into "unknown".
+		// Also, if the only flow names are generic CRUD verbs (creation, retrieval,
+		// update, deletion, etc.), prefer the surface name which is more meaningful.
+		if len(flowNames) == 0 || allGenericFlows(flowNames) {
+			if len(surfaces) > 0 {
+				// Use the first surface token — in event names the leading noun
+				// is typically the domain (e.g. "restaurant" in restaurant_list_view,
+				// "delivery" in delivery_eta_view). For "item_add_to_cart" the
+				// surfaces are [product, cart]; we pick the last non-generic one,
+				// but default to the first which is the domain noun.
+				flowNames = []string{surfaces[0]}
+			} else if len(flowNames) == 0 {
+				flowNames = []string{"unknown"}
+			}
 		}
 
 		// Process each flow the event belongs to
@@ -308,9 +342,18 @@ func (r *Reconstructor) reconstructUserFlows(userID string, events []*Normalized
 				Status:       r.firstOrEmpty(statuses),
 				RawEventName: event.Event,
 				SessionID:    event.SessionID,
+				Context:      event.Context,
 			}
 			active.Events = append(active.Events, flowEvent)
 			active.EndTime = timestamp
+
+			// Merge event context into flow-level context
+			if event.Context != nil {
+				if active.Context == nil {
+					active.Context = canonical.NewEventContext()
+				}
+				active.Context.Merge(event.Context)
+			}
 
 			// Check for flow completion
 			if isSuccess || isExit {
@@ -418,4 +461,25 @@ func toStringSlice(input []interface{}) []string {
 		}
 	}
 	return result
+}
+
+// genericFlowNames are CRUD-like flow names that are too generic to be useful
+// as standalone flow identifiers. When a more specific surface name exists,
+// these are demoted in favor of the surface.
+var genericFlowNames = map[string]bool{
+	"creation":  true, // "new" still maps to Flow "creation"
+	"retrieval": true,
+	"search":    true,
+	"filter":    true,
+	"sort":      true,
+}
+
+// allGenericFlows returns true if every flow name in the slice is a generic CRUD verb.
+func allGenericFlows(flows []string) bool {
+	for _, f := range flows {
+		if !genericFlowNames[f] {
+			return false
+		}
+	}
+	return true
 }
