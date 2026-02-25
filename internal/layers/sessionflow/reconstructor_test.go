@@ -423,3 +423,171 @@ func TestSortByTimestampEpochMs(t *testing.T) {
 			events[0].ID, events[1].ID, events[2].ID)
 	}
 }
+
+func TestSurfaceFallbackFolding(t *testing.T) {
+	r := New()
+
+	// Simulate ride-hailing: booking_requested → driver_assigned → driver_cancelled → booking_requested → driver_assigned → ride_started → ride_completed
+	// "driver" events should fold into the active "booking" flow, not create separate "driver" flows.
+	events := []*NormalizedEventInput{
+		{
+			ID: "1", UserID: "user_1", Timestamp: "2026-02-04T10:00:00Z",
+			Event: "booking_requested",
+			Normalized: &NormalizedData{
+				Original: "booking_requested", Tokens: []string{"booking", "requested"},
+				Status: []string{"request"}, Surface: []string{"booking"}, Flow: []string{},
+			},
+		},
+		{
+			ID: "2", UserID: "user_1", Timestamp: "2026-02-04T10:00:30Z",
+			Event: "driver_assigned",
+			Normalized: &NormalizedData{
+				Original: "driver_assigned", Tokens: []string{"driver", "assigned"},
+				Status: []string{"assigned"}, Surface: []string{"driver"}, Flow: []string{},
+			},
+		},
+		{
+			ID: "3", UserID: "user_1", Timestamp: "2026-02-04T10:01:00Z",
+			Event: "driver_cancelled",
+			Normalized: &NormalizedData{
+				Original: "driver_cancelled", Tokens: []string{"driver", "cancelled"},
+				Status: []string{"cancelled"}, Surface: []string{"driver"}, Flow: []string{},
+			},
+		},
+		{
+			ID: "4", UserID: "user_1", Timestamp: "2026-02-04T10:02:00Z",
+			Event: "booking_requested",
+			Normalized: &NormalizedData{
+				Original: "booking_requested", Tokens: []string{"booking", "requested"},
+				Status: []string{"request"}, Surface: []string{"booking"}, Flow: []string{},
+			},
+		},
+		{
+			ID: "5", UserID: "user_1", Timestamp: "2026-02-04T10:02:30Z",
+			Event: "driver_assigned",
+			Normalized: &NormalizedData{
+				Original: "driver_assigned", Tokens: []string{"driver", "assigned"},
+				Status: []string{"assigned"}, Surface: []string{"driver"}, Flow: []string{},
+			},
+		},
+		{
+			ID: "6", UserID: "user_1", Timestamp: "2026-02-04T10:03:00Z",
+			Event: "ride_started",
+			Normalized: &NormalizedData{
+				Original: "ride_started", Tokens: []string{"ride", "started"},
+				Status: []string{"start"}, Surface: []string{"ride"}, Flow: []string{},
+			},
+		},
+		{
+			ID: "7", UserID: "user_1", Timestamp: "2026-02-04T10:10:00Z",
+			Event: "ride_completed",
+			Normalized: &NormalizedData{
+				Original: "ride_completed", Tokens: []string{"ride", "completed"},
+				Status: []string{"success"}, Surface: []string{"ride"}, Flow: []string{},
+			},
+		},
+	}
+
+	flowInstances, err := r.reconstruct(events)
+	if err != nil {
+		t.Fatalf("Reconstruct failed: %v", err)
+	}
+
+	// Count flows by name
+	flowCounts := make(map[string]int)
+	for _, f := range flowInstances {
+		flowCounts[f.Flow]++
+	}
+
+	// There should be NO "driver" flows — driver events should fold into booking
+	if flowCounts["driver"] > 0 {
+		t.Errorf("Expected 0 driver flows (should fold into booking), got %d", flowCounts["driver"])
+	}
+
+	// Should have 2 booking flows (first cancelled, second still active)
+	if flowCounts["booking"] != 2 {
+		t.Errorf("Expected 2 booking flows, got %d", flowCounts["booking"])
+	}
+
+	// Should have 1 ride flow
+	if flowCounts["ride"] != 1 {
+		t.Errorf("Expected 1 ride flow, got %d", flowCounts["ride"])
+	}
+
+	// The first booking should contain the driver_assigned and driver_cancelled events
+	var booking1Events int
+	for _, f := range flowInstances {
+		if f.Flow == "booking" && !f.IsComplete {
+			if booking1Events == 0 || len(f.Events) > booking1Events {
+				booking1Events = len(f.Events)
+			}
+		}
+	}
+	// First booking: booking_requested + driver_assigned + driver_cancelled = 3 events
+	found3EventBooking := false
+	for _, f := range flowInstances {
+		if f.Flow == "booking" && len(f.Events) == 3 {
+			found3EventBooking = true
+			break
+		}
+	}
+	if !found3EventBooking {
+		t.Errorf("Expected a booking flow with 3 events (booking_requested + driver_assigned + driver_cancelled)")
+		for _, f := range flowInstances {
+			t.Logf("  Flow=%s Events=%d IsComplete=%v", f.Flow, len(f.Events), f.IsComplete)
+		}
+	}
+
+	// ride flow should be complete (success)
+	for _, f := range flowInstances {
+		if f.Flow == "ride" {
+			if !f.IsComplete {
+				t.Error("ride flow should be complete (success)")
+			}
+			if len(f.Events) != 2 {
+				t.Errorf("ride flow should have 2 events, got %d", len(f.Events))
+			}
+		}
+	}
+}
+
+func TestLifecycleSurfaceSkip(t *testing.T) {
+	r := New()
+
+	events := []*NormalizedEventInput{
+		{
+			ID: "1", UserID: "user_1", Timestamp: "2026-02-04T10:00:00Z",
+			Event: "session_start",
+			Normalized: &NormalizedData{
+				Status: []string{"start"}, Surface: []string{"session"}, Flow: []string{},
+			},
+		},
+		{
+			ID: "2", UserID: "user_1", Timestamp: "2026-02-04T10:01:00Z",
+			Event: "checkout_view",
+			Normalized: &NormalizedData{
+				Status: []string{"view"}, Surface: []string{"checkout"}, Flow: []string{"payment"},
+			},
+		},
+		{
+			ID: "3", UserID: "user_1", Timestamp: "2026-02-04T10:10:00Z",
+			Event: "session_end",
+			Normalized: &NormalizedData{
+				Status: []string{"end"}, Surface: []string{"session"}, Flow: []string{},
+			},
+		},
+	}
+
+	flowInstances, err := r.reconstruct(events)
+	if err != nil {
+		t.Fatalf("Reconstruct failed: %v", err)
+	}
+
+	// Should have exactly 1 flow (payment), no "session" flow
+	if len(flowInstances) != 1 {
+		t.Fatalf("Expected 1 flow instance, got %d", len(flowInstances))
+	}
+	if flowInstances[0].Flow != "payment" {
+		t.Errorf("Flow = %v, want payment", flowInstances[0].Flow)
+	}
+}

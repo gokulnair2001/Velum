@@ -8,6 +8,7 @@ import (
 // PatternSnapshot represents a historical snapshot of a pattern
 // This is the canonical data model for storage
 type PatternSnapshot struct {
+	ProjectID      string    `json:"project_id"`
 	Date           time.Time `json:"date"`
 	PatternType    string    `json:"pattern_type"`
 	Flow           string    `json:"flow"`
@@ -24,8 +25,8 @@ type PatternSnapshot struct {
 // Any storage backend (PostgreSQL, etc.) must implement this
 type Storage interface {
 	// FetchBaselineSnapshots retrieves historical snapshots for a pattern+flow+context
-	// Used for baseline computation
-	FetchBaselineSnapshots(ctx context.Context, patternType, flow, contextKey string, endDate time.Time, windowDays int) ([]*PatternSnapshot, error)
+	// Used for baseline computation. projectID scopes data to one project.
+	FetchBaselineSnapshots(ctx context.Context, projectID, patternType, flow, contextKey string, endDate time.Time, windowDays int) ([]*PatternSnapshot, error)
 
 	// StoreSnapshot persists a pattern snapshot (upsert semantics)
 	// Idempotent - safe for retries
@@ -34,6 +35,9 @@ type Storage interface {
 	// Cleanup removes snapshots older than retention period
 	// Returns number of deleted rows
 	Cleanup(ctx context.Context) (int64, error)
+
+	// Ping checks storage connectivity (for health checks)
+	Ping(ctx context.Context) error
 
 	// Close closes the storage connection
 	Close() error

@@ -2,6 +2,7 @@ package vocabagent
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -173,7 +174,7 @@ func (v *VocabAgent) Process(input interface{}) (interface{}, error) {
 	}
 
 	// Call AI to classify words
-	classified, err := v.classifyWords(uncategorizedWords)
+	classified, err := v.classifyWords(context.Background(), uncategorizedWords)
 	if err != nil {
 		v.circuitBreaker.RecordFailure()
 		if v.config.Debug {
@@ -203,6 +204,11 @@ func (v *VocabAgent) Process(input interface{}) (interface{}, error) {
 
 // ClassifyWords classifies a list of uncategorized words (public method for direct use)
 func (v *VocabAgent) ClassifyWords(words []string) (*VocabAgentResult, error) {
+	return v.ClassifyWordsCtx(context.Background(), words)
+}
+
+// ClassifyWordsCtx is like ClassifyWords but accepts a context for cancellation.
+func (v *VocabAgent) ClassifyWordsCtx(ctx context.Context, words []string) (*VocabAgentResult, error) {
 	emptyResult := &VocabData{Status: []string{}, Surface: []string{}, Flow: []string{}}
 
 	if !v.config.Enabled || v.config.APIKey == "" {
@@ -231,7 +237,7 @@ func (v *VocabAgent) ClassifyWords(words []string) (*VocabAgentResult, error) {
 		}, nil
 	}
 
-	classified, err := v.classifyWords(words)
+	classified, err := v.classifyWords(ctx, words)
 	if err != nil {
 		v.circuitBreaker.RecordFailure()
 		return &VocabAgentResult{
@@ -325,7 +331,7 @@ func (v *VocabAgent) extractWordsFromInterface(val interface{}, seen map[string]
 }
 
 // classifyWords calls the AI API to classify words
-func (v *VocabAgent) classifyWords(words []string) (*VocabData, error) {
+func (v *VocabAgent) classifyWords(ctx context.Context, words []string) (*VocabData, error) {
 	if v.config.Debug {
 		fmt.Printf("[DEBUG] [VocabAgent] Calling AI to classify: %v\n", words)
 	}
@@ -355,7 +361,7 @@ func (v *VocabAgent) classifyWords(words []string) (*VocabData, error) {
 	}
 
 	// Make HTTP request
-	req, err := http.NewRequest("POST", groqAPIEndpoint, bytes.NewReader(requestBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", groqAPIEndpoint, bytes.NewReader(requestBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}

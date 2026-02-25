@@ -234,3 +234,269 @@ func containsBehavior(behaviors []BehaviorType, target BehaviorType) bool {
 	}
 	return false
 }
+
+// ==================== Context-Aware Tests ====================
+
+func TestFlowIntentFromConfig(t *testing.T) {
+	a := New()
+
+	flows := []*sessionflow.FlowInstance{
+		{
+			FlowInstanceID: "flow_1",
+			UserID:         "user_a",
+			Flow:           "restaurant_list",
+			Events: []sessionflow.FlowEvent{
+				{Status: "view", RawEventName: "restaurant_list_view"},
+			},
+			IsComplete: false,
+		},
+		{
+			FlowInstanceID: "flow_2",
+			UserID:         "user_a",
+			Flow:           "checkout",
+			Events: []sessionflow.FlowEvent{
+				{Status: "view", RawEventName: "checkout_view"},
+			},
+			IsComplete: false,
+		},
+	}
+
+	ctx := &AnalysisContext{
+		Scope: ScopeUserSession,
+		FlowConfigs: map[string]*FlowConfig{
+			"restaurant_list": {
+				Name:   "restaurant_list",
+				Intent: FlowIntentBrowse,
+			},
+			"checkout": {
+				Name:   "checkout",
+				Intent: FlowIntentTransact,
+			},
+		},
+	}
+
+	result, err := a.ProcessWithContext(flows, ctx)
+	if err != nil {
+		t.Fatalf("ProcessWithContext failed: %v", err)
+	}
+
+	analyzed := result.([]*AnalyzedFlow)
+	if len(analyzed) != 2 {
+		t.Fatalf("Expected 2 flows, got %d", len(analyzed))
+	}
+
+	// restaurant_list should be browse
+	if analyzed[0].FlowIntent != FlowIntentBrowse {
+		t.Errorf("restaurant_list FlowIntent = %v, want browse", analyzed[0].FlowIntent)
+	}
+	// checkout should be transact
+	if analyzed[1].FlowIntent != FlowIntentTransact {
+		t.Errorf("checkout FlowIntent = %v, want transact", analyzed[1].FlowIntent)
+	}
+}
+
+func TestFlowIntentDefaultsToUnknown(t *testing.T) {
+	a := New()
+
+	flows := []*sessionflow.FlowInstance{
+		{
+			FlowInstanceID: "flow_1",
+			UserID:         "user_a",
+			Flow:           "unknown_flow",
+			Events: []sessionflow.FlowEvent{
+				{Status: "view", RawEventName: "unknown_view"},
+			},
+		},
+	}
+
+	ctx := &AnalysisContext{
+		Scope: ScopeRawBatch,
+	}
+
+	result, err := a.ProcessWithContext(flows, ctx)
+	if err != nil {
+		t.Fatalf("ProcessWithContext failed: %v", err)
+	}
+
+	analyzed := result.([]*AnalyzedFlow)
+	if analyzed[0].FlowIntent != FlowIntentUnknown {
+		t.Errorf("FlowIntent = %v, want unknown", analyzed[0].FlowIntent)
+	}
+}
+
+func TestFunnelProgressionDetection(t *testing.T) {
+	a := New()
+
+	now := time.Now()
+
+	flows := []*sessionflow.FlowInstance{
+		{
+			FlowInstanceID: "flow_1",
+			UserID:         "user_a",
+			Flow:           "checkout",
+			StartTime:      now,
+			Events: []sessionflow.FlowEvent{
+				{Timestamp: now, Status: "view", RawEventName: "checkout_view"},
+				{Timestamp: now.Add(1 * time.Minute), Status: "click", RawEventName: "checkout_click"},
+			},
+			IsComplete: false,
+		},
+		{
+			FlowInstanceID: "flow_2",
+			UserID:         "user_a",
+			Flow:           "payment",
+			StartTime:      now.Add(2 * time.Minute),
+			Events: []sessionflow.FlowEvent{
+				{Timestamp: now.Add(2 * time.Minute), Status: "view", RawEventName: "payment_view"},
+				{Timestamp: now.Add(3 * time.Minute), Status: "click", RawEventName: "payment_click"},
+				{Timestamp: now.Add(4 * time.Minute), Status: "success", RawEventName: "payment_success"},
+			},
+			IsComplete: true,
+		},
+	}
+
+	ctx := &AnalysisContext{
+		Scope: ScopeUserSession,
+		FunnelDefinitions: map[string][]string{
+			"purchase_funnel": {"checkout", "payment", "order"},
+		},
+	}
+
+	result, err := a.ProcessWithContext(flows, ctx)
+	if err != nil {
+		t.Fatalf("ProcessWithContext failed: %v", err)
+	}
+
+	analyzed := result.([]*AnalyzedFlow)
+
+	// checkout flow should have BehaviorProgress (user advanced to payment)
+	var checkoutFlow *AnalyzedFlow
+	var paymentFlow *AnalyzedFlow
+	for _, f := range analyzed {
+		if f.Flow == "checkout" {
+			checkoutFlow = f
+		}
+		if f.Flow == "payment" {
+			paymentFlow = f
+		}
+	}
+
+	if checkoutFlow == nil || paymentFlow == nil {
+		t.Fatal("Could not find checkout or payment flow")
+	}
+
+	if !containsBehavior(checkoutFlow.Behaviors, BehaviorProgress) {
+		t.Error("Expected BehaviorProgress on checkout flow (user progressed to payment)")
+	}
+
+	// checkout should NOT have abandon (it was replaced by progress)
+	if containsBehavior(checkoutFlow.Behaviors, BehaviorAbandon) {
+		t.Error("checkout should not have abandon — user progressed to next step")
+	}
+
+	// checkout outcome should be progress
+	if checkoutFlow.Outcome != BehaviorProgress {
+		t.Errorf("checkout Outcome = %v, want progress", checkoutFlow.Outcome)
+	}
+
+	// payment should have succeed (unchanged by funnel logic)
+	if paymentFlow.Outcome != BehaviorSucceed {
+		t.Errorf("payment Outcome = %v, want succeed", paymentFlow.Outcome)
+	}
+}
+
+func TestFunnelProgressionNoAdvancement(t *testing.T) {
+	a := New()
+
+	now := time.Now()
+
+	// User only reaches checkout, never progresses to payment
+	flows := []*sessionflow.FlowInstance{
+		{
+			FlowInstanceID: "flow_1",
+			UserID:         "user_a",
+			Flow:           "checkout",
+			StartTime:      now,
+			Events: []sessionflow.FlowEvent{
+				{Timestamp: now, Status: "view", RawEventName: "checkout_view"},
+				{Timestamp: now.Add(1 * time.Minute), Status: "exit", RawEventName: "checkout_exit"},
+			},
+			IsComplete: false,
+		},
+	}
+
+	ctx := &AnalysisContext{
+		Scope: ScopeUserSession,
+		FunnelDefinitions: map[string][]string{
+			"purchase_funnel": {"checkout", "payment", "order"},
+		},
+	}
+
+	result, err := a.ProcessWithContext(flows, ctx)
+	if err != nil {
+		t.Fatalf("ProcessWithContext failed: %v", err)
+	}
+
+	analyzed := result.([]*AnalyzedFlow)
+
+	// Should NOT have progress — user didn't advance
+	if containsBehavior(analyzed[0].Behaviors, BehaviorProgress) {
+		t.Error("Should not have BehaviorProgress — user didn't reach next funnel step")
+	}
+
+	// Should have abandon (exited without success)
+	if !containsBehavior(analyzed[0].Behaviors, BehaviorAbandon) {
+		t.Error("Expected abandon behavior for user who exited checkout")
+	}
+}
+
+func TestEventCountIsSet(t *testing.T) {
+	a := New()
+
+	flow := &sessionflow.FlowInstance{
+		FlowInstanceID: "flow_1",
+		UserID:         "user_a",
+		Flow:           "checkout",
+		Events: []sessionflow.FlowEvent{
+			{Status: "view", RawEventName: "checkout_view"},
+			{Status: "click", RawEventName: "checkout_click"},
+			{Status: "success", RawEventName: "checkout_success"},
+		},
+		IsComplete: true,
+	}
+
+	result := a.analyzeFlow(flow)
+
+	if result.EventCount != 3 {
+		t.Errorf("EventCount = %d, want 3", result.EventCount)
+	}
+}
+
+func TestProcessWithContextNilContextFallsBack(t *testing.T) {
+	a := New()
+
+	flows := []*sessionflow.FlowInstance{
+		{
+			FlowInstanceID: "flow_1",
+			UserID:         "user_a",
+			Flow:           "payment",
+			Events: []sessionflow.FlowEvent{
+				{Status: "view", RawEventName: "payment_view"},
+				{Status: "click", RawEventName: "payment_click"},
+				{Status: "success", RawEventName: "payment_success"},
+			},
+			IsComplete: true,
+		},
+	}
+
+	// nil context should fall back to standard Process
+	result, err := a.ProcessWithContext(flows, nil)
+	if err != nil {
+		t.Fatalf("ProcessWithContext with nil failed: %v", err)
+	}
+
+	analyzed := result.([]*AnalyzedFlow)
+	if analyzed[0].Outcome != BehaviorSucceed {
+		t.Errorf("Outcome = %v, want succeed", analyzed[0].Outcome)
+	}
+}

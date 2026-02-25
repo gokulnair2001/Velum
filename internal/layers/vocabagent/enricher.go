@@ -35,9 +35,22 @@ func (v *VocabEnricher) Name() string {
 }
 
 // Process implements the Layer interface
-// It extracts words from events, finds unknown ones, classifies them via AI,
-// stores them, and passes through the original input
 func (v *VocabEnricher) Process(input interface{}) (interface{}, error) {
+	return v.processWithCtx(context.Background(), input)
+}
+
+// ProcessWithContext implements the ContextAwareLayer interface.
+// Extracts the request context so storage and AI calls respect cancellation.
+func (v *VocabEnricher) ProcessWithContext(input interface{}, metadata interface{}) (interface{}, error) {
+	ctx := context.Background()
+	type contextProvider interface{ RequestContext() context.Context }
+	if cp, ok := metadata.(contextProvider); ok {
+		ctx = cp.RequestContext()
+	}
+	return v.processWithCtx(ctx, input)
+}
+
+func (v *VocabEnricher) processWithCtx(ctx context.Context, input interface{}) (interface{}, error) {
 	// If storage or agent is not configured, pass through
 	if v.storage == nil || v.agent == nil {
 		if v.debug {
@@ -53,8 +66,6 @@ func (v *VocabEnricher) Process(input interface{}) (interface{}, error) {
 		}
 		return input, nil
 	}
-
-	ctx := context.Background()
 
 	// Extract all tokens from input
 	tokens := v.extractTokens(input)
@@ -83,7 +94,7 @@ func (v *VocabEnricher) Process(input interface{}) (interface{}, error) {
 	}
 
 	// Call VocabAgent to classify unknown tokens
-	result, err := v.agent.ClassifyWords(unknownTokens)
+	result, err := v.agent.ClassifyWordsCtx(ctx, unknownTokens)
 	if err != nil {
 		if v.debug {
 			fmt.Printf("[DEBUG] [VocabEnricher] VocabAgent classification failed: %v\n", err)

@@ -5,11 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"regexp"
 	"time"
+
+	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/velum/internal/canonical"
 	"github.com/velum/internal/config"
 	"github.com/velum/internal/layers"
+	"github.com/velum/internal/layers/aggregation"
 	"github.com/velum/internal/layers/ai"
 	"github.com/velum/internal/layers/baseline"
 	"github.com/velum/internal/layers/behavior"
@@ -24,10 +29,12 @@ import (
 // Handler holds dependencies for HTTP handlers
 type Handler struct {
 	pipeline        *layers.Pipeline
+	reportBuilder   *aggregation.ReportBuilder
 	storage         storage.Storage
 	vocabStorage    *vocabagent.PostgresVocabStorage
 	propertyStorage *propertyagent.PostgresPropertyStorage
 	environment     string
+	cleanupCancel   context.CancelFunc // cancels the background cleanup goroutine
 }
 
 // NewHandler creates a new handler instance with the provided configuration
@@ -41,7 +48,8 @@ func NewHandler(cfg *config.Config) *Handler {
 		fmt.Printf("   Host: %s:%d\n", cfg.Storage.Postgres.Host, cfg.Storage.Postgres.Port)
 		fmt.Printf("   Database: %s\n", cfg.Storage.Postgres.Database)
 		fmt.Printf("   Error: %v\n", err)
-		storageInstance = nil
+		fmt.Println("\n🛑 Cannot start without a working database. Fix the connection and retry.")
+		os.Exit(1)
 	} else {
 		// Log which storage backend is being used
 		fmt.Printf("✅ Storage connection successful\n")
@@ -55,8 +63,11 @@ func NewHandler(cfg *config.Config) *Handler {
 	}
 
 	// Start background cleanup goroutine for storage retention
+	var cleanupCancel context.CancelFunc
 	if storageInstance != nil {
-		go startStorageCleanup(storageInstance, cfg.Storage.RetentionDays)
+		var cleanupCtx context.Context
+		cleanupCtx, cleanupCancel = context.WithCancel(context.Background())
+		go startStorageCleanup(cleanupCtx, storageInstance, cfg.Storage.RetentionDays)
 	}
 
 	// Initialize vocabulary storage using the same PostgreSQL database
@@ -213,68 +224,214 @@ func NewHandler(cfg *config.Config) *Handler {
 
 	return &Handler{
 		pipeline:        pipeline,
+		reportBuilder:   aggregation.NewReportBuilder(),
 		storage:         storageInstance,
 		vocabStorage:    vocabStorage,
 		propertyStorage: propertyStorage,
 		environment:     cfg.Server.Environment,
+		cleanupCancel:   cleanupCancel,
 	}
 }
 
-// startStorageCleanup runs periodic cleanup of old snapshots
-func startStorageCleanup(store storage.Storage, retentionDays int) {
+// startStorageCleanup runs periodic cleanup of old snapshots.
+// It stops when ctx is cancelled (server shutdown).
+func startStorageCleanup(ctx context.Context, store storage.Storage, retentionDays int) {
 	// Run cleanup immediately on startup
-	ctx := context.Background()
 	if deleted, err := store.Cleanup(ctx); err != nil {
 		fmt.Printf("Warning: Storage cleanup failed: %v\n", err)
 	} else if deleted > 0 {
 		fmt.Printf("Storage cleanup: removed %d old snapshots\n", deleted)
 	}
 
-	// Then run every 24 hours
+	// Then run every 24 hours, stopping when context is cancelled
 	ticker := time.NewTicker(24 * time.Hour)
-	for range ticker.C {
-		if deleted, err := store.Cleanup(ctx); err != nil {
-			fmt.Printf("Warning: Storage cleanup failed: %v\n", err)
-		} else if deleted > 0 {
-			fmt.Printf("Storage cleanup: removed %d old snapshots\n", deleted)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if deleted, err := store.Cleanup(ctx); err != nil {
+				if ctx.Err() != nil {
+					return // shutting down
+				}
+				fmt.Printf("Warning: Storage cleanup failed: %v\n", err)
+			} else if deleted > 0 {
+				fmt.Printf("Storage cleanup: removed %d old snapshots\n", deleted)
+			}
 		}
 	}
 }
 
-// Health handles the health check request
+// Close stops the background cleanup goroutine and closes all storage
+// connections. It should be called during graceful shutdown.
+func (h *Handler) Close() error {
+	// Stop cleanup goroutine
+	if h.cleanupCancel != nil {
+		h.cleanupCancel()
+	}
+
+	var firstErr error
+	if h.storage != nil {
+		if err := h.storage.Close(); err != nil {
+			fmt.Printf("Warning: Failed to close storage: %v\n", err)
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	if h.vocabStorage != nil {
+		if err := h.vocabStorage.Close(); err != nil {
+			fmt.Printf("Warning: Failed to close vocab storage: %v\n", err)
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	if h.propertyStorage != nil {
+		if err := h.propertyStorage.Close(); err != nil {
+			fmt.Printf("Warning: Failed to close property storage: %v\n", err)
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
+}
+
+// Health handles the health check request.
+// Checks database connectivity and returns degraded status if DB is unreachable.
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
-	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"status":  "healthy",
+	result := map[string]interface{}{
 		"service": "velum",
-	})
+	}
+
+	// Check database connectivity
+	if h.storage != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		if err := h.storage.Ping(ctx); err != nil {
+			result["status"] = "degraded"
+			result["db"] = "unreachable"
+			respondJSON(w, http.StatusServiceUnavailable, result)
+			return
+		}
+		result["db"] = "connected"
+	}
+
+	result["status"] = "healthy"
+	respondJSON(w, http.StatusOK, result)
 }
 
 // EventRequest represents the incoming raw event data
 type EventRequest struct {
-	Events []map[string]interface{} `json:"events"`
+	Events          []map[string]interface{}  `json:"events"`
+	AnalysisContext *behavior.AnalysisContext `json:"analysis_context,omitempty"`
 }
 
 // AnalysisResponse represents the behavioral analysis response
 type AnalysisResponse struct {
-	Success bool        `json:"success"`
-	Message string      `json:"message"`
-	Data    interface{} `json:"data,omitempty"`
+	Success   bool        `json:"success"`
+	Message   string      `json:"message"`
+	RequestID string      `json:"request_id,omitempty"`
+	Data      interface{} `json:"data,omitempty"`
 }
+
+// maxRequestBodySize is the maximum allowed request body size (10MB)
+const maxRequestBodySize = 10 * 1024 * 1024
+
+// ProjectIDHeader is the HTTP header that identifies the project.
+const ProjectIDHeader = "X-Project-ID"
+
+// validProjectID matches alphanumeric, hyphens, underscores (1-64 chars)
+var validProjectID = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
 
 // Analyze handles the behavioral analysis request
 func (h *Handler) Analyze(w http.ResponseWriter, r *http.Request) {
-	var req EventRequest
+	// Limit request body size to prevent OOM
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodySize)
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	// Extract and validate project ID from header
+	projectID := r.Header.Get(ProjectIDHeader)
+	if projectID == "" {
 		respondJSON(w, http.StatusBadRequest, AnalysisResponse{
 			Success: false,
-			Message: "Invalid request body",
+			Message: "Missing required header 'X-Project-ID'. Each request must identify the project.",
+		})
+		return
+	}
+	if !validProjectID.MatchString(projectID) {
+		respondJSON(w, http.StatusBadRequest, AnalysisResponse{
+			Success: false,
+			Message: "Invalid 'X-Project-ID'. Must be 1-64 alphanumeric characters, hyphens, or underscores.",
 		})
 		return
 	}
 
+	var req EventRequest
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err.Error() == "http: request body too large" {
+			respondJSON(w, http.StatusRequestEntityTooLarge, AnalysisResponse{
+				Success: false,
+				Message: "Request body too large. Maximum size is 10MB.",
+			})
+			return
+		}
+		respondJSON(w, http.StatusBadRequest, AnalysisResponse{
+			Success: false,
+			Message: "Invalid request body: malformed JSON.",
+		})
+		return
+	}
+
+	// Validate minimum input: at least 1 event required
+	if len(req.Events) == 0 {
+		respondJSON(w, http.StatusBadRequest, AnalysisResponse{
+			Success: false,
+			Message: "At least 1 event is required in the 'events' array.",
+		})
+		return
+	}
+
+	// Validate required fields on events
+	for i, evt := range req.Events {
+		if _, ok := evt["event"]; !ok {
+			respondJSON(w, http.StatusBadRequest, AnalysisResponse{
+				Success: false,
+				Message: fmt.Sprintf("Event at index %d is missing required field 'event'.", i),
+			})
+			return
+		}
+		if _, ok := evt["user_id"]; !ok {
+			respondJSON(w, http.StatusBadRequest, AnalysisResponse{
+				Success: false,
+				Message: fmt.Sprintf("Event at index %d is missing required field 'user_id'.", i),
+			})
+			return
+		}
+		if _, ok := evt["ts"]; !ok {
+			respondJSON(w, http.StatusBadRequest, AnalysisResponse{
+				Success: false,
+				Message: fmt.Sprintf("Event at index %d is missing required field 'ts'.", i),
+			})
+			return
+		}
+	}
+
 	// Debug mode is enabled in development environment (only affects console logging)
 	isDebugMode := h.environment == "development"
+
+	// Resolve analysis context (use default if not provided)
+	analysisCtx := req.AnalysisContext
+	if analysisCtx == nil {
+		analysisCtx = behavior.DefaultAnalysisContext()
+	}
+	// Always set ProjectID from the HTTP header (overrides any body value)
+	analysisCtx.ProjectID = projectID
+	// Carry the HTTP request context through the pipeline so layers can
+	// cancel LLM / DB calls when the client disconnects.
+	analysisCtx.Ctx = r.Context()
 
 	// Check recommended properties and collect warnings
 	warnings := canonical.CheckRecommendedProperties(req.Events)
@@ -283,6 +440,13 @@ func (h *Handler) Analyze(w http.ResponseWriter, r *http.Request) {
 		fmt.Println("[DEBUG] ======= New Analysis Request =======")
 		fmt.Printf("[DEBUG] Environment: %s\n", h.environment)
 		fmt.Printf("[DEBUG] Events received: %d\n", len(req.Events))
+		fmt.Printf("[DEBUG] Analysis scope: %s\n", analysisCtx.Scope)
+		if len(analysisCtx.FunnelDefinitions) > 0 {
+			fmt.Printf("[DEBUG] Funnel definitions: %d\n", len(analysisCtx.FunnelDefinitions))
+		}
+		if len(analysisCtx.FlowConfigs) > 0 {
+			fmt.Printf("[DEBUG] Flow configs: %d\n", len(analysisCtx.FlowConfigs))
+		}
 		fmt.Printf("[DEBUG] Pipeline layers: %v\n", h.pipeline.LayerNames())
 		if len(warnings) > 0 {
 			for _, w := range warnings {
@@ -292,8 +456,10 @@ func (h *Handler) Analyze(w http.ResponseWriter, r *http.Request) {
 		fmt.Println("[DEBUG] Starting pipeline execution...")
 	}
 
-	// Execute pipeline
-	result, err := h.pipeline.Execute(req.Events)
+	// Execute pipeline with analysis context
+	// ExecuteWithContext passes the context to ContextAwareLayer implementations
+	// (behavior analyzer, pattern detector) while other layers run normally.
+	result, err := h.pipeline.ExecuteWithContext(req.Events, analysisCtx)
 	if err != nil {
 		if isDebugMode {
 			fmt.Printf("[DEBUG] Pipeline execution failed: %v\n", err)
@@ -310,48 +476,44 @@ func (h *Handler) Analyze(w http.ResponseWriter, r *http.Request) {
 		fmt.Println("[DEBUG] =======================================")
 	}
 
-	// Build response based on final output type
-	responseData := map[string]interface{}{}
+	// Extract typed data from pipeline output
+	analyzedFlows, detectedPatterns, changeResults, aiAnalysis, aiEnabled := aggregation.ExtractFromPipelineOutput(result)
 
-	// Check result type and expose appropriate fields
-	switch v := result.(type) {
-	case *ai.AIResult:
-		responseData["ai_enabled"] = v.AIEnabled
-		if v.AIEnabled && v.AIAnalysis != nil {
-			// AI enabled: show ai_analysis only (no data object)
-			responseData["ai_analysis"] = v.AIAnalysis
-		} else {
-			// AI disabled: show enriched change_results
-			responseData["data"] = map[string]interface{}{
-				"change_results": formatChangeResults(v.ChangeResults, v.DetectedPatterns, v.AnalyzedFlows),
-			}
+	// Build structured report
+	report := h.reportBuilder.Build(&aggregation.ReportInput{
+		AnalysisContext:  analysisCtx,
+		AnalyzedFlows:    analyzedFlows,
+		DetectedPatterns: detectedPatterns,
+		ChangeResults:    changeResults,
+		AIAnalysis:       aiAnalysis,
+		AIEnabled:        aiEnabled,
+		InputEventsCount: len(req.Events),
+		RawEvents:        req.Events,
+		Warnings:         warnings,
+		PipelineLayers:   h.pipeline.LayerNames(),
+	})
+
+	// Slim response: when AI is enabled, send only ai_analysis.
+	// When AI is off, send the raw patterns (what the AI would have analyzed).
+	var responseData interface{}
+	if aiEnabled && report.AIAnalysis != nil {
+		responseData = map[string]interface{}{
+			"ai_analysis": report.AIAnalysis,
 		}
-	case *baseline.BaselineResult:
-		// Baseline result without AI: show enriched change_results
-		responseData["ai_enabled"] = false
-		responseData["data"] = map[string]interface{}{
-			"change_results": formatChangeResults(v.ChangeResults, v.DetectedPatterns, v.AnalyzedFlows),
+	} else {
+		responseData = map[string]interface{}{
+			"patterns": report.Patterns,
 		}
-	case *pattern.PatternResult:
-		responseData["ai_enabled"] = false
-		responseData["data"] = map[string]interface{}{
-			"analyzed_flows":    v.AnalyzedFlows,
-			"detected_patterns": v.DetectedPatterns,
-		}
-	default:
-		responseData["ai_enabled"] = false
-		responseData["data"] = result
 	}
 
-	// Include warnings in response if any recommended properties are missing
-	if len(warnings) > 0 {
-		responseData["warnings"] = warnings
-	}
+	// Include request ID for tracing
+	reqID := middleware.GetReqID(r.Context())
 
 	respondJSON(w, http.StatusOK, AnalysisResponse{
-		Success: true,
-		Message: "Behavioral analysis complete",
-		Data:    responseData,
+		Success:   true,
+		Message:   "Behavioral analysis complete",
+		RequestID: reqID,
+		Data:      responseData,
 	})
 }
 
@@ -360,123 +522,4 @@ func respondJSON(w http.ResponseWriter, status int, payload interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(payload)
-}
-
-// formatChangeResults formats change results for response, enriched with
-// pattern evidence (severity, confidence, affected_users) and a per-flow
-// context breakdown (dimensional/conditional distribution across flows).
-func formatChangeResults(changeResults []*baseline.ChangeResult, detectedPatterns interface{}, analyzedFlows interface{}) []map[string]interface{} {
-	// Build lookup maps for enrichment
-	evidenceMap := buildEvidenceMap(detectedPatterns)
-	contextMap := buildFlowContextMap(analyzedFlows)
-
-	formatted := make([]map[string]interface{}, 0, len(changeResults))
-
-	for _, change := range changeResults {
-		var entry map[string]interface{}
-
-		if change.BaselineStatus == baseline.BaselineStatusFirstObservation {
-			// First observation: minimal data only
-			entry = map[string]interface{}{
-				"pattern_type":       change.PatternType,
-				"flow":               change.Flow,
-				"baseline_available": false,
-			}
-		} else {
-			// Baseline exists: full data
-			entry = map[string]interface{}{
-				"pattern_type":          change.PatternType,
-				"flow":                  change.Flow,
-				"baseline_available":    true,
-				"current_impact_ratio":  change.CurrentImpactRatio,
-				"baseline_impact_ratio": change.BaselineImpactRatio,
-				"delta":                 change.Delta,
-				"delta_percentage":      change.DeltaPercentage,
-				"trend":                 change.Trend,
-				"change_significance":   change.ChangeSignificance,
-				"baseline_status":       change.BaselineStatus,
-				"baseline_window":       change.BaselineWindow,
-				"baseline_days":         change.BaselineDays,
-			}
-		}
-
-		if change.ContextKey != "" {
-			entry["context_key"] = change.ContextKey
-		}
-
-		// Enrich with pattern evidence
-		key := change.PatternType + ":" + change.Flow
-		if ev, ok := evidenceMap[key]; ok {
-			entry["severity"] = ev.Severity
-			entry["confidence"] = ev.Confidence
-			entry["affected_users"] = ev.AffectedUsers
-			entry["total_flows"] = ev.TotalFlows
-			entry["impact_ratio"] = ev.Evidence.Ratio
-			if ev.Evidence.Description != "" {
-				entry["evidence"] = ev.Evidence.Description
-			}
-		}
-
-		// Enrich with context breakdown for this flow
-		if ctx, ok := contextMap[change.Flow]; ok && len(ctx) > 0 {
-			entry["context"] = ctx
-		}
-
-		formatted = append(formatted, entry)
-	}
-
-	return formatted
-}
-
-// buildEvidenceMap creates a lookup of "patternType:flow" -> DetectedPattern.
-func buildEvidenceMap(detected interface{}) map[string]*pattern.DetectedPattern {
-	result := make(map[string]*pattern.DetectedPattern)
-	patterns, ok := detected.([]*pattern.DetectedPattern)
-	if !ok {
-		return result
-	}
-	for _, p := range patterns {
-		key := string(p.Pattern) + ":" + p.Flow
-		result[key] = p
-	}
-	return result
-}
-
-// buildFlowContextMap aggregates context properties per flow from analyzed flows.
-// Returns flow -> property -> value -> count.
-func buildFlowContextMap(analyzedFlows interface{}) map[string]map[string]map[string]int {
-	result := make(map[string]map[string]map[string]int)
-	flows, ok := analyzedFlows.([]*behavior.AnalyzedFlow)
-	if !ok {
-		return result
-	}
-	for _, f := range flows {
-		if f.Context == nil {
-			continue
-		}
-		props, exists := result[f.Flow]
-		if !exists {
-			props = make(map[string]map[string]int)
-			result[f.Flow] = props
-		}
-		for k, v := range f.Context.Dimensions {
-			if props[k] == nil {
-				props[k] = make(map[string]int)
-			}
-			props[k][v]++
-		}
-		for k, v := range f.Context.Conditions {
-			if props[k] == nil {
-				props[k] = make(map[string]int)
-			}
-			props[k][fmt.Sprintf("%v", v)]++
-		}
-		for k, v := range f.Context.Targets {
-			if props[k] == nil {
-				props[k] = make(map[string]int)
-			}
-			props[k][fmt.Sprintf("%v", v)]++
-		}
-	}
-	return result
 }

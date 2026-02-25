@@ -2,6 +2,7 @@ package propertyagent
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -97,6 +98,11 @@ func NewAgentWithConfig(config *Config) *PropertyAgent {
 // ClassifyProperties classifies a batch of unknown properties into target or condition.
 // Only string-valued (non-numeric, non-dimension) properties reach this method.
 func (a *PropertyAgent) ClassifyProperties(properties []UnknownProperty) (*ClassificationResult, error) {
+	return a.ClassifyPropertiesCtx(context.Background(), properties)
+}
+
+// ClassifyPropertiesCtx is like ClassifyProperties but accepts a context.
+func (a *PropertyAgent) ClassifyPropertiesCtx(ctx context.Context, properties []UnknownProperty) (*ClassificationResult, error) {
 	emptyResult := &ClassificationResult{Target: []string{}, Condition: []string{}}
 
 	if !a.config.Enabled || a.config.APIKey == "" {
@@ -115,7 +121,7 @@ func (a *PropertyAgent) ClassifyProperties(properties []UnknownProperty) (*Class
 		return emptyResult, fmt.Errorf("circuit breaker open")
 	}
 
-	result, err := a.callAI(properties)
+	result, err := a.callAI(ctx, properties)
 	if err != nil {
 		a.circuitBreaker.RecordFailure()
 		if a.config.Debug {
@@ -129,7 +135,7 @@ func (a *PropertyAgent) ClassifyProperties(properties []UnknownProperty) (*Class
 }
 
 // callAI makes the actual API call to classify properties.
-func (a *PropertyAgent) callAI(properties []UnknownProperty) (*ClassificationResult, error) {
+func (a *PropertyAgent) callAI(ctx context.Context, properties []UnknownProperty) (*ClassificationResult, error) {
 	if a.config.Debug {
 		fmt.Printf("[DEBUG] [PropertyAgent] Calling AI to classify %d properties\n", len(properties))
 	}
@@ -162,7 +168,7 @@ func (a *PropertyAgent) callAI(properties []UnknownProperty) (*ClassificationRes
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", groqAPIEndpoint, bytes.NewReader(requestBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", groqAPIEndpoint, bytes.NewReader(requestBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}

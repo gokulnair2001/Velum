@@ -75,8 +75,12 @@ func NewVocabulary() *Vocabulary {
 			"stopped": "end",
 
 			// Resolution states
-			"resolve":  "resolve",
-			"resolved": "resolve",
+			"resolve":      "resolve",
+			"resolved":     "resolve",
+			"verify":       "success",
+			"verified":     "success",
+			"verification": "verify",
+			"unverified":   "failed",
 
 			// Attempt/Initiation states
 			"attempt":   "attempt",
@@ -108,6 +112,21 @@ func NewVocabulary() *Vocabulary {
 			"declined": "failed",
 			"timeout":  "failed",
 
+			// Cancellation states (status, not flow — "driver_cancelled" means
+			// "the driver flow had a cancellation", not "the user navigated to cancellation flow")
+			"cancel":    "cancelled",
+			"canceled":  "cancelled",
+			"cancelled": "cancelled",
+
+			// Assignment/availability states
+			"assign":      "assigned",
+			"assigned":    "assigned",
+			"unassigned":  "unassigned",
+			"available":   "available",
+			"unavailable": "unavailable",
+			"estimated":   "estimate",
+			"estimate":    "estimate",
+
 			// Request states
 			"request":   "request",
 			"requested": "request",
@@ -127,6 +146,9 @@ func NewVocabulary() *Vocabulary {
 			"expanded":  "expand",
 			"collapse":  "collapse",
 			"collapsed": "collapse",
+			"browse":    "view",
+			"browsed":   "view",
+			"browsing":  "view",
 
 			// CRUD action states — these are user actions, not flow categories.
 			// The flow name comes from the target noun (e.g. "add_to_cart" → cart).
@@ -192,6 +214,46 @@ func NewVocabulary() *Vocabulary {
 			"coupon":     "promo",
 			"discount":   "promo",
 			"voucher":    "promo",
+
+			// Ride-hailing / logistics
+			"ride":         "ride",
+			"rides":        "ride",
+			"trip":         "ride",
+			"trips":        "ride",
+			"booking":      "booking",
+			"bookings":     "booking",
+			"reservation":  "booking",
+			"reservations": "booking",
+			"driver":       "driver",
+			"drivers":      "driver",
+			"rider":        "rider",
+			"riders":       "rider",
+			"destination":  "destination",
+			"pickup":       "pickup",
+			"dropoff":      "dropoff",
+
+			// Streaming / Media
+			"playback":  "playback",
+			"player":    "playback",
+			"stream":    "playback",
+			"streaming": "playback",
+			"video":     "video",
+			"audio":     "audio",
+			"media":     "media",
+			"content":   "content",
+			"episode":   "episode",
+			"movie":     "movie",
+			"watch":     "video",
+			"listen":    "audio",
+			"queue":     "queue",
+			"playlist":  "playlist",
+			"channel":   "channel",
+			"category":  "category",
+			"genre":     "genre",
+
+			// Application lifecycle
+			"app":         "app",
+			"application": "app",
 
 			// UI Components
 			"modal":    "modal",
@@ -271,10 +333,7 @@ func NewVocabulary() *Vocabulary {
 
 			// CRUD - Update
 
-			// CRUD - Delete
-			"cancel":    "cancellation",
-			"canceled":  "cancellation",
-			"cancelled": "cancellation",
+			// CRUD - Delete (cancel moved to Status — see Status section)
 
 			// Search
 			"search":   "search",
@@ -286,14 +345,21 @@ func NewVocabulary() *Vocabulary {
 			"sorted":   "sort",
 
 			// Commerce flows
-			"checkout": "checkout",
-			"payment":  "payment",
-			"pay":      "payment",
-			"purchase": "purchase",
-			"buy":      "purchase",
-			"order":    "order",
-			"ordered":  "order",
-			"refund":   "refund",
+			"checkout":  "checkout",
+			"payment":   "payment",
+			"pay":       "payment",
+			"purchase":  "purchase",
+			"buy":       "purchase",
+			"order":     "order",
+			"ordered":   "order",
+			"refund":    "refund",
+			"cart":      "cart",
+			"basket":    "cart",
+			"wishlist":  "wishlist",
+			"favorites": "wishlist",
+			"coupon":    "promo",
+			"promo":     "promo",
+			"voucher":   "promo",
 
 			// Sharing
 
@@ -357,6 +423,12 @@ func NewVocabulary() *Vocabulary {
 			"by":      true,
 			"of":      true,
 			"at":      true,
+			"no":      true,
+			"not":     true,
+			"max":     true,
+			"wall":    true,
+			"total":   true,
+			"count":   true,
 		},
 	}
 }

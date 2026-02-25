@@ -43,9 +43,22 @@ func (e *ContextEnricher) Name() string {
 }
 
 // Process implements the Layer interface.
-// It discovers unknown properties, classifies via AI, stores to DB,
-// and passes through the original input unchanged.
 func (e *ContextEnricher) Process(input interface{}) (interface{}, error) {
+	return e.processWithCtx(context.Background(), input)
+}
+
+// ProcessWithContext implements the ContextAwareLayer interface.
+// Extracts the request context so DB and AI calls respect cancellation.
+func (e *ContextEnricher) ProcessWithContext(input interface{}, metadata interface{}) (interface{}, error) {
+	ctx := context.Background()
+	type contextProvider interface{ RequestContext() context.Context }
+	if cp, ok := metadata.(contextProvider); ok {
+		ctx = cp.RequestContext()
+	}
+	return e.processWithCtx(ctx, input)
+}
+
+func (e *ContextEnricher) processWithCtx(ctx context.Context, input interface{}) (interface{}, error) {
 	// If storage or agent is not configured, pass through
 	if e.storage == nil || e.agent == nil {
 		if e.debug {
@@ -74,8 +87,6 @@ func (e *ContextEnricher) Process(input interface{}) (interface{}, error) {
 	if len(events) == 0 {
 		return input, nil
 	}
-
-	ctx := context.Background()
 
 	// Collect all unique extra property keys across all events with sample values.
 	// Only collect string-valued properties that aren't core fields, dimensions, or numeric.
@@ -148,7 +159,7 @@ func (e *ContextEnricher) classifyAndStore(ctx context.Context, unknownKeys map[
 	}
 
 	// Call AI
-	result, err := e.agent.ClassifyProperties(properties)
+	result, err := e.agent.ClassifyPropertiesCtx(ctx, properties)
 	if err != nil {
 		return err
 	}

@@ -1,0 +1,20 @@
+{
+    "success": true,
+    "message": "Behavioral analysis complete",
+    "data": {
+        "ai_analysis": {
+            "enabled": true,
+            "summary": "retry_storm observed in payment flow affecting 2 of 8 eligible flows (38%).",
+            "details": [
+                "Pattern retry_storm in flow payment: 2 affected users out of 8 total eligible flows (38%). Error codes observed: gateway_timeout, card_declined, insufficient_funds. Devices: mobile (7) and desktop (1). Countries: IN (6), UK (1), US (1).",
+                "Baseline comparison not available for retry_storm in payment flow.",
+                "Sample journeys: User u5 experienced payment_failed with error_code=gateway_timeout; User u1 experienced payment_failed with error_code=card_declined; User u2 experienced payment_failed with error_code=insufficient_funds."
+            ],
+            "hypotheses": [
+                "The retry storm may be associated with gateway_timeout and card_declined errors, which together represent 4 of the 5 failed occurrences reported in the payment flow.",
+                "The majority of observed retries occur on mobile devices (7 of 8 flows) and in India (6 of 8 flows), suggesting a concentration of this behavior in that device and region context."
+            ],
+            "confidence_note": "These are hypotheses based on observed behavioral changes."
+        }
+    }
+}

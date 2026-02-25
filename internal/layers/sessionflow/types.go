@@ -79,13 +79,19 @@ func DefaultConfig() *Config {
 	return &Config{
 		FlowTimeout: 30 * time.Minute,
 		EntryStatuses: map[string]bool{
-			"view":  true,
-			"start": true,
+			"view":    true,
+			"start":   true,
+			"request": true,
+			"open":    true,
+			"select":  true, // user selection starts a new intent flow (e.g. content_selected)
 		},
 		ExitStatuses: map[string]bool{
-			"dismiss": true,
-			"end":     true,
-			"exit":    true,
+			"dismiss":   true,
+			"end":       true,
+			"exit":      true,
+			"cancelled": true,
+			"failed":    true,
+			"error":     true,
 		},
 		SuccessStatuses: map[string]bool{
 			"success": true,
