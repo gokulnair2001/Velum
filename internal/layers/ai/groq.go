@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -180,7 +181,7 @@ func (a *Analyzer) processWithCtx(ctx context.Context, input interface{}) (inter
 	// If AI is disabled, pass through the baseline result as AIResult
 	if !a.config.Enabled || a.config.APIKey == "" {
 		if a.config.Debug {
-			fmt.Println("[DEBUG] [AI] AI layer disabled, passing through data")
+			slog.Debug("AI layer disabled, passing through data", "layer", "ai_analyzer")
 		}
 		return a.passThrough(input)
 	}
@@ -189,21 +190,19 @@ func (a *Analyzer) processWithCtx(ctx context.Context, input interface{}) (inter
 	baselineResult, ok := input.(*baseline.BaselineResult)
 	if !ok {
 		if a.config.Debug {
-			fmt.Printf("[DEBUG] [AI] Input is not BaselineResult, passing through (type: %T)\n", input)
+			slog.Debug("input is not BaselineResult, passing through", "layer", "ai_analyzer", "input_type", fmt.Sprintf("%T", input))
 		}
 		return a.passThrough(input)
 	}
 
 	if a.config.Debug {
-		fmt.Println("[DEBUG] [AI] Starting AI analysis...")
-		fmt.Printf("[DEBUG] [AI] Model: %s\n", a.config.Model)
-		fmt.Printf("[DEBUG] [AI] Change results to analyze: %d\n", len(baselineResult.ChangeResults))
+		slog.Debug("starting AI analysis", "layer", "ai_analyzer", "model", a.config.Model, "change_results", len(baselineResult.ChangeResults))
 	}
 
 	// Short-circuit: don't call LLM when there are no patterns to analyze
 	if len(baselineResult.ChangeResults) == 0 {
 		if a.config.Debug {
-			fmt.Println("[DEBUG] [AI] No patterns detected, skipping LLM call")
+			slog.Debug("no patterns detected, skipping LLM call", "layer", "ai_analyzer")
 		}
 		return &AIResult{
 			ChangeResults:    baselineResult.ChangeResults,
@@ -222,7 +221,7 @@ func (a *Analyzer) processWithCtx(ctx context.Context, input interface{}) (inter
 	// Check circuit breaker before making AI request
 	if err := a.circuitBreaker.Allow(); err != nil {
 		if a.config.Debug {
-			fmt.Println("[DEBUG] [AI] Circuit breaker is open, skipping AI analysis")
+			slog.Debug("circuit breaker is open, skipping AI analysis", "layer", "ai_analyzer")
 		}
 		return &AIResult{
 			ChangeResults:    baselineResult.ChangeResults,
@@ -243,7 +242,7 @@ func (a *Analyzer) processWithCtx(ctx context.Context, input interface{}) (inter
 	if err != nil {
 		a.circuitBreaker.RecordFailure()
 		if a.config.Debug {
-			fmt.Printf("[DEBUG] [AI] Analysis failed: %v\n", err)
+			slog.Debug("AI analysis failed", "layer", "ai_analyzer", "error", err)
 		}
 		// On error, return result without AI analysis but with error info
 		return &AIResult{
@@ -263,8 +262,7 @@ func (a *Analyzer) processWithCtx(ctx context.Context, input interface{}) (inter
 	a.circuitBreaker.RecordSuccess()
 
 	if a.config.Debug {
-		fmt.Println("[DEBUG] [AI] Analysis completed successfully")
-		fmt.Printf("[DEBUG] [AI] Summary: %s\n", analysis.Summary)
+		slog.Debug("AI analysis completed", "layer", "ai_analyzer", "summary", analysis.Summary)
 	}
 
 	return &AIResult{
@@ -305,7 +303,7 @@ func (a *Analyzer) analyze(ctx context.Context, baselineResult *baseline.Baselin
 	}
 
 	if a.config.Debug {
-		fmt.Printf("[DEBUG] [AI] Built prompt (%d chars)\n", len(userPrompt))
+		slog.Debug("built AI prompt", "layer", "ai_analyzer", "prompt_chars", len(userPrompt))
 	}
 
 	// Create the Groq request
@@ -332,7 +330,7 @@ func (a *Analyzer) analyze(ctx context.Context, baselineResult *baseline.Baselin
 	}
 
 	if a.config.Debug {
-		fmt.Println("[DEBUG] [AI] Sending request to Groq API...")
+		slog.Debug("sending request to Groq API", "layer", "ai_analyzer")
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", groqAPIEndpoint, bytes.NewBuffer(reqBody))
@@ -350,7 +348,7 @@ func (a *Analyzer) analyze(ctx context.Context, baselineResult *baseline.Baselin
 	defer resp.Body.Close()
 
 	if a.config.Debug {
-		fmt.Printf("[DEBUG] [AI] Groq API response status: %d\n", resp.StatusCode)
+		slog.Debug("Groq API response received", "layer", "ai_analyzer", "status", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -385,7 +383,7 @@ func (a *Analyzer) analyze(ctx context.Context, baselineResult *baseline.Baselin
 
 	if finishReason == "length" {
 		if a.config.Debug {
-			fmt.Println("[DEBUG] [AI] Response was truncated (finish_reason=length), attempting JSON repair")
+			slog.Debug("response truncated, attempting JSON repair", "layer", "ai_analyzer", "finish_reason", finishReason)
 		}
 		// Try to repair the truncated JSON before parsing
 		content = repairTruncatedJSON(content)

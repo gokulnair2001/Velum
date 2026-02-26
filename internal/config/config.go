@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 
 	"gopkg.in/yaml.v3"
@@ -208,17 +209,17 @@ func Load() *Config {
 	for _, path := range configPaths {
 		if data, err := os.ReadFile(path); err == nil {
 			if err := yaml.Unmarshal(data, cfg); err != nil {
-				fmt.Printf("Warning: Failed to parse %s: %v\n", path, err)
+				slog.Warn("failed to parse config file", "path", path, "error", err)
 				continue
 			}
-			fmt.Printf("Loaded configuration from %s\n", path)
+			slog.Info("loaded configuration", "path", path)
 			loaded = true
 			break
 		}
 	}
 
 	if !loaded {
-		fmt.Println("No config file found, using defaults")
+		slog.Info("no config file found, using defaults")
 	}
 
 	// Environment variables override config file

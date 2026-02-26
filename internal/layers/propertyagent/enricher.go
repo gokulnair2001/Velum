@@ -2,7 +2,7 @@ package propertyagent
 
 import (
 	"context"
-	"fmt"
+	"log/slog"
 
 	"github.com/velum/internal/canonical"
 )
@@ -62,7 +62,7 @@ func (e *ContextEnricher) processWithCtx(ctx context.Context, input interface{})
 	// If storage or agent is not configured, pass through
 	if e.storage == nil || e.agent == nil {
 		if e.debug {
-			fmt.Println("[DEBUG] [ContextEnricher] Storage or agent not configured, passing through")
+			slog.Debug("storage or agent not configured, passing through", "layer", "context_enricher")
 		}
 		return input, nil
 	}
@@ -70,7 +70,7 @@ func (e *ContextEnricher) processWithCtx(ctx context.Context, input interface{})
 	// If agent is disabled, pass through
 	if !e.agent.config.Enabled || e.agent.config.APIKey == "" {
 		if e.debug {
-			fmt.Println("[DEBUG] [ContextEnricher] PropertyAgent disabled, passing through")
+			slog.Debug("property agent disabled, passing through", "layer", "context_enricher")
 		}
 		return input, nil
 	}
@@ -79,7 +79,7 @@ func (e *ContextEnricher) processWithCtx(ctx context.Context, input interface{})
 	events, ok := input.([]map[string]interface{})
 	if !ok {
 		if e.debug {
-			fmt.Println("[DEBUG] [ContextEnricher] Input is not []map[string]interface{}, passing through")
+			slog.Debug("input is not []map[string]interface{}, passing through", "layer", "context_enricher")
 		}
 		return input, nil
 	}
@@ -113,7 +113,7 @@ func (e *ContextEnricher) processWithCtx(ctx context.Context, input interface{})
 			entry, err := e.storage.GetProperty(ctx, key)
 			if err != nil {
 				if e.debug {
-					fmt.Printf("[DEBUG] [ContextEnricher] Error looking up property '%s': %v\n", key, err)
+					slog.Debug("error looking up property", "layer", "context_enricher", "property", key, "error", err)
 				}
 				continue
 			}
@@ -133,17 +133,17 @@ func (e *ContextEnricher) processWithCtx(ctx context.Context, input interface{})
 	// Batch classify unknowns via AI (if any)
 	if len(unknownKeys) > 0 {
 		if e.debug {
-			fmt.Printf("[DEBUG] [ContextEnricher] %d unknown property keys to classify\n", len(unknownKeys))
+			slog.Debug("unknown property keys to classify", "layer", "context_enricher", "count", len(unknownKeys))
 		}
 
 		if err := e.classifyAndStore(ctx, unknownKeys); err != nil {
 			if e.debug {
-				fmt.Printf("[DEBUG] [ContextEnricher] AI classification failed: %v\n", err)
+				slog.Debug("AI classification failed", "layer", "context_enricher", "error", err)
 			}
 			// Don't block the pipeline
 		}
 	} else if e.debug {
-		fmt.Println("[DEBUG] [ContextEnricher] All property keys already known, passing through")
+		slog.Debug("all property keys already known, passing through", "layer", "context_enricher")
 	}
 
 	// Pass through original input unchanged (like VocabEnricher)
@@ -191,11 +191,11 @@ func (e *ContextEnricher) classifyAndStore(ctx context.Context, unknownKeys map[
 	if len(entries) > 0 {
 		if err := e.storage.UpsertPropertyBatch(ctx, entries); err != nil {
 			if e.debug {
-				fmt.Printf("[DEBUG] [ContextEnricher] Failed to store classified properties: %v\n", err)
+				slog.Debug("failed to store classified properties", "layer", "context_enricher", "error", err)
 			}
 			return err
 		}
-		fmt.Printf("Context: Learned and stored %d new property classifications from AI\n", len(entries))
+		slog.Info("learned and stored new property classifications from AI", "layer", "context_enricher", "count", len(entries))
 	}
 
 	return nil

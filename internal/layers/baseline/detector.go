@@ -3,6 +3,7 @@ package baseline
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math"
 	"sync"
 	"time"
@@ -132,7 +133,7 @@ func (d *Detector) analyzePatternChanges(ctx context.Context, patternResult *pat
 			// Data is within baseline window (including today) - compare and store
 			changeResult = d.analyzePatternChange(ctx, currentSnapshot, projectID)
 			if err := d.storage.StoreSnapshot(ctx, currentSnapshot); err != nil {
-				fmt.Printf("Warning: failed to store snapshot: %v\n", err)
+				slog.Warn("failed to store snapshot", "error", err)
 			}
 		}
 

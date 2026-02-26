@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -295,7 +296,7 @@ func (s *PostgresStorage) Cleanup(ctx context.Context) (int64, error) {
 		query := fmt.Sprintf(`DELETE FROM %s WHERE date < $1`, tbl)
 		result, err := s.db.ExecContext(ctx, query, cutoffStr)
 		if err != nil {
-			fmt.Printf("Warning: cleanup failed for table %s: %v\n", tbl, err)
+			slog.Warn("cleanup failed for table", "table", tbl, "error", err)
 			continue
 		}
 		if n, err := result.RowsAffected(); err == nil {

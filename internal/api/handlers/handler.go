@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"regexp"
@@ -43,23 +44,25 @@ func NewHandler(cfg *config.Config) *Handler {
 	storageInstance, err := storage.NewStorage(&cfg.Storage)
 
 	if err != nil {
-		fmt.Printf("❌ Storage initialization failed\n")
-		fmt.Printf("   Backend: PostgreSQL\n")
-		fmt.Printf("   Host: %s:%d\n", cfg.Storage.Postgres.Host, cfg.Storage.Postgres.Port)
-		fmt.Printf("   Database: %s\n", cfg.Storage.Postgres.Database)
-		fmt.Printf("   Error: %v\n", err)
-		fmt.Println("\n🛑 Cannot start without a working database. Fix the connection and retry.")
+		slog.Error("storage initialization failed",
+			"backend", "postgresql",
+			"host", cfg.Storage.Postgres.Host,
+			"port", cfg.Storage.Postgres.Port,
+			"database", cfg.Storage.Postgres.Database,
+			"error", err,
+		)
 		os.Exit(1)
 	} else {
-		// Log which storage backend is being used
-		fmt.Printf("✅ Storage connection successful\n")
-		fmt.Printf("   Backend: PostgreSQL\n")
-		fmt.Printf("   Host: %s:%d\n", cfg.Storage.Postgres.Host, cfg.Storage.Postgres.Port)
-		fmt.Printf("   Database: %s\n", cfg.Storage.Postgres.Database)
-		fmt.Printf("   User: %s\n", cfg.Storage.Postgres.User)
-		fmt.Printf("   SSL Mode: %s\n", cfg.Storage.Postgres.SSLMode)
-		fmt.Printf("   Max Connections: %d\n", cfg.Storage.Postgres.MaxConnections)
-		fmt.Printf("   Retention: %d days\n", cfg.Storage.RetentionDays)
+		slog.Info("storage connection successful",
+			"backend", "postgresql",
+			"host", cfg.Storage.Postgres.Host,
+			"port", cfg.Storage.Postgres.Port,
+			"database", cfg.Storage.Postgres.Database,
+			"user", cfg.Storage.Postgres.User,
+			"ssl_mode", cfg.Storage.Postgres.SSLMode,
+			"max_connections", cfg.Storage.Postgres.MaxConnections,
+			"retention_days", cfg.Storage.RetentionDays,
+		)
 	}
 
 	// Start background cleanup goroutine for storage retention
@@ -74,12 +77,12 @@ func NewHandler(cfg *config.Config) *Handler {
 	var vocabStorage *vocabagent.PostgresVocabStorage
 	vocabStorage, err = vocabagent.NewPostgresVocabStorage(&cfg.Storage.Postgres)
 	if err != nil {
-		fmt.Printf("Warning: Failed to initialize vocab storage: %v\n", err)
+		slog.Warn("failed to initialize vocab storage", "error", err)
 	} else {
 		// Seed built-in vocabulary (only runs if storage is empty)
 		ctx := context.Background()
 		if err := vocabagent.SeedBuiltinVocabulary(ctx, vocabStorage); err != nil {
-			fmt.Printf("Warning: Failed to seed vocabulary: %v\n", err)
+			slog.Warn("failed to seed vocabulary", "error", err)
 		}
 	}
 
@@ -90,12 +93,12 @@ func NewHandler(cfg *config.Config) *Handler {
 	var propertyStorage *propertyagent.PostgresPropertyStorage
 	propertyStorage, err = propertyagent.NewPostgresPropertyStorage(&cfg.Storage.Postgres)
 	if err != nil {
-		fmt.Printf("Warning: Failed to initialize property storage: %v\n", err)
+		slog.Warn("failed to initialize property storage", "error", err)
 	} else {
 		// Seed built-in dimensions (only runs if storage is empty)
 		ctx := context.Background()
 		if err := propertyagent.SeedBuiltinDimensions(ctx, propertyStorage); err != nil {
-			fmt.Printf("Warning: Failed to seed property registry: %v\n", err)
+			slog.Warn("failed to seed property registry", "error", err)
 		}
 	}
 
@@ -121,9 +124,9 @@ func NewHandler(cfg *config.Config) *Handler {
 		contextAgent := propertyagent.NewAgentWithConfig(contextAgentConfig)
 		contextEnricher := propertyagent.NewContextEnricher(propertyStorage, contextAgent, cfg.Server.Environment == "development")
 		pipeline.Register(contextEnricher)
-		fmt.Println("Context Enricher layer enabled with model:", cfg.ContextAgent.Model)
+		slog.Info("context enricher layer enabled", "model", cfg.ContextAgent.Model)
 	} else {
-		fmt.Println("Context Enricher layer disabled (enabled:", cfg.ContextAgent.Enabled, ", api_key set:", cfg.ContextAgent.APIKey != "", ", storage:", propertyStorage != nil, ")")
+		slog.Info("context enricher layer disabled", "enabled", cfg.ContextAgent.Enabled, "api_key_set", cfg.ContextAgent.APIKey != "", "storage_available", propertyStorage != nil)
 	}
 
 	// Layer 1: Vocab Enricher - discovers unknown words and classifies via AI (optional)
@@ -149,19 +152,19 @@ func NewHandler(cfg *config.Config) *Handler {
 		vocabAgentInstance := vocabagent.NewWithConfig(vocabAgentConfig)
 		enricher := vocabagent.NewVocabEnricher(vocabStorage, vocabAgentInstance, cfg.Server.Environment == "development")
 		pipeline.Register(enricher)
-		fmt.Println("Vocab Enricher layer enabled with model:", cfg.VocabAgent.Model)
+		slog.Info("vocab enricher layer enabled", "model", cfg.VocabAgent.Model)
 	} else {
-		fmt.Println("Vocab Enricher layer disabled (enabled:", cfg.VocabAgent.Enabled, ", api_key set:", cfg.VocabAgent.APIKey != "", ", storage:", vocabStorage != nil, ")")
+		slog.Info("vocab enricher layer disabled", "enabled", cfg.VocabAgent.Enabled, "api_key_set", cfg.VocabAgent.APIKey != "", "storage_available", vocabStorage != nil)
 	}
 
 	// Layer 2: Event Adapter - normalizes raw events and builds canonical context
 	// Uses vocab storage for word categorization and property storage for context building
 	if vocabStorage != nil && propertyStorage != nil {
 		pipeline.Register(eventadapter.NewWithLookups(vocabStorage, propertyStorage))
-		fmt.Println("Event Adapter using PostgreSQL vocabulary + property registry lookup")
+		slog.Info("event adapter using postgresql vocabulary + property registry lookup")
 	} else if vocabStorage != nil {
 		pipeline.Register(eventadapter.NewWithVocabLookup(vocabStorage))
-		fmt.Println("Event Adapter using PostgreSQL vocabulary lookup")
+		slog.Info("event adapter using postgresql vocabulary lookup")
 	} else {
 		pipeline.Register(eventadapter.New())
 	}
@@ -197,7 +200,7 @@ func NewHandler(cfg *config.Config) *Handler {
 		// Parse circuit breaker reset timeout
 		resetTimeout, err := time.ParseDuration(cfg.Resiliency.CircuitBreaker.ResetTimeout)
 		if err != nil {
-			fmt.Printf("Warning: Invalid circuit breaker reset_timeout '%s', using 30s\n", cfg.Resiliency.CircuitBreaker.ResetTimeout)
+			slog.Warn("invalid circuit breaker reset_timeout, using default", "value", cfg.Resiliency.CircuitBreaker.ResetTimeout, "default", "30s")
 			resetTimeout = 30 * time.Second
 		}
 
@@ -213,13 +216,12 @@ func NewHandler(cfg *config.Config) *Handler {
 			},
 		}
 		pipeline.Register(ai.NewWithConfig(aiConfig))
-		fmt.Println("AI Analyzer layer enabled with model:", cfg.AIAnalyzer.Model)
+		slog.Info("AI analyzer layer enabled", "model", cfg.AIAnalyzer.Model)
 		if cfg.Resiliency.CircuitBreaker.Enabled {
-			fmt.Printf("   Circuit breaker: threshold=%d, reset=%s\n",
-				cfg.Resiliency.CircuitBreaker.FailureThreshold, resetTimeout)
+			slog.Info("circuit breaker configured", "threshold", cfg.Resiliency.CircuitBreaker.FailureThreshold, "reset_timeout", resetTimeout)
 		}
 	} else {
-		fmt.Println("AI Analyzer layer disabled (enabled:", cfg.AIAnalyzer.Enabled, ", api_key set:", cfg.AIAnalyzer.APIKey != "", ")")
+		slog.Info("AI analyzer layer disabled", "enabled", cfg.AIAnalyzer.Enabled, "api_key_set", cfg.AIAnalyzer.APIKey != "")
 	}
 
 	return &Handler{
@@ -238,9 +240,9 @@ func NewHandler(cfg *config.Config) *Handler {
 func startStorageCleanup(ctx context.Context, store storage.Storage, retentionDays int) {
 	// Run cleanup immediately on startup
 	if deleted, err := store.Cleanup(ctx); err != nil {
-		fmt.Printf("Warning: Storage cleanup failed: %v\n", err)
+		slog.Warn("storage cleanup failed", "error", err)
 	} else if deleted > 0 {
-		fmt.Printf("Storage cleanup: removed %d old snapshots\n", deleted)
+		slog.Info("storage cleanup completed", "deleted_snapshots", deleted)
 	}
 
 	// Then run every 24 hours, stopping when context is cancelled
@@ -255,9 +257,9 @@ func startStorageCleanup(ctx context.Context, store storage.Storage, retentionDa
 				if ctx.Err() != nil {
 					return // shutting down
 				}
-				fmt.Printf("Warning: Storage cleanup failed: %v\n", err)
+				slog.Warn("storage cleanup failed", "error", err)
 			} else if deleted > 0 {
-				fmt.Printf("Storage cleanup: removed %d old snapshots\n", deleted)
+				slog.Info("storage cleanup completed", "deleted_snapshots", deleted)
 			}
 		}
 	}
@@ -274,7 +276,7 @@ func (h *Handler) Close() error {
 	var firstErr error
 	if h.storage != nil {
 		if err := h.storage.Close(); err != nil {
-			fmt.Printf("Warning: Failed to close storage: %v\n", err)
+			slog.Warn("failed to close storage", "error", err)
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -282,7 +284,7 @@ func (h *Handler) Close() error {
 	}
 	if h.vocabStorage != nil {
 		if err := h.vocabStorage.Close(); err != nil {
-			fmt.Printf("Warning: Failed to close vocab storage: %v\n", err)
+			slog.Warn("failed to close vocab storage", "error", err)
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -290,7 +292,7 @@ func (h *Handler) Close() error {
 	}
 	if h.propertyStorage != nil {
 		if err := h.propertyStorage.Close(); err != nil {
-			fmt.Printf("Warning: Failed to close property storage: %v\n", err)
+			slog.Warn("failed to close property storage", "error", err)
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -437,23 +439,22 @@ func (h *Handler) Analyze(w http.ResponseWriter, r *http.Request) {
 	warnings := canonical.CheckRecommendedProperties(req.Events)
 
 	if isDebugMode {
-		fmt.Println("[DEBUG] ======= New Analysis Request =======")
-		fmt.Printf("[DEBUG] Environment: %s\n", h.environment)
-		fmt.Printf("[DEBUG] Events received: %d\n", len(req.Events))
-		fmt.Printf("[DEBUG] Analysis scope: %s\n", analysisCtx.Scope)
+		logAttrs := []any{
+			"env", h.environment,
+			"event_count", len(req.Events),
+			"scope", analysisCtx.Scope,
+			"pipeline_layers", h.pipeline.LayerNames(),
+		}
 		if len(analysisCtx.FunnelDefinitions) > 0 {
-			fmt.Printf("[DEBUG] Funnel definitions: %d\n", len(analysisCtx.FunnelDefinitions))
+			logAttrs = append(logAttrs, "funnel_definitions", len(analysisCtx.FunnelDefinitions))
 		}
 		if len(analysisCtx.FlowConfigs) > 0 {
-			fmt.Printf("[DEBUG] Flow configs: %d\n", len(analysisCtx.FlowConfigs))
+			logAttrs = append(logAttrs, "flow_configs", len(analysisCtx.FlowConfigs))
 		}
-		fmt.Printf("[DEBUG] Pipeline layers: %v\n", h.pipeline.LayerNames())
 		if len(warnings) > 0 {
-			for _, w := range warnings {
-				fmt.Printf("[DEBUG] [WARNING] %s\n", w)
-			}
+			logAttrs = append(logAttrs, "warnings", warnings)
 		}
-		fmt.Println("[DEBUG] Starting pipeline execution...")
+		slog.Debug("new analysis request", logAttrs...)
 	}
 
 	// Execute pipeline with analysis context
@@ -462,7 +463,7 @@ func (h *Handler) Analyze(w http.ResponseWriter, r *http.Request) {
 	result, err := h.pipeline.ExecuteWithContext(req.Events, analysisCtx)
 	if err != nil {
 		if isDebugMode {
-			fmt.Printf("[DEBUG] Pipeline execution failed: %v\n", err)
+			slog.Debug("pipeline execution failed", "error", err)
 		}
 		respondJSON(w, http.StatusInternalServerError, AnalysisResponse{
 			Success: false,
@@ -472,8 +473,7 @@ func (h *Handler) Analyze(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if isDebugMode {
-		fmt.Println("[DEBUG] Pipeline execution complete")
-		fmt.Println("[DEBUG] =======================================")
+		slog.Debug("pipeline execution complete")
 	}
 
 	// Extract typed data from pipeline output
