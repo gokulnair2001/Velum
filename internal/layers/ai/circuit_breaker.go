@@ -2,6 +2,7 @@ package ai
 
 import (
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -43,11 +44,11 @@ type CircuitBreaker struct {
 	config CircuitBreakerConfig
 	debug  bool
 
-	mu               sync.RWMutex
-	state            CircuitState
-	failureCount     int
-	lastFailureTime  time.Time
-	lastStateChange  time.Time
+	mu              sync.RWMutex
+	state           CircuitState
+	failureCount    int
+	lastFailureTime time.Time
+	lastStateChange time.Time
 }
 
 // NewCircuitBreaker creates a new circuit breaker
@@ -80,7 +81,7 @@ func (cb *CircuitBreaker) Allow() error {
 			cb.state = CircuitHalfOpen
 			cb.lastStateChange = time.Now()
 			if cb.debug {
-				println("[DEBUG] [CircuitBreaker] Transitioning to half-open state")
+				slog.Debug("circuit breaker state change", "layer", "ai_analyzer", "transition", "half-open")
 			}
 			return nil
 		}
@@ -109,7 +110,7 @@ func (cb *CircuitBreaker) RecordSuccess() {
 		cb.failureCount = 0
 		cb.lastStateChange = time.Now()
 		if cb.debug {
-			println("[DEBUG] [CircuitBreaker] Transitioning to closed state (recovered)")
+			slog.Debug("circuit breaker state change", "layer", "ai_analyzer", "transition", "closed", "reason", "recovered")
 		}
 	} else if cb.state == CircuitClosed {
 		// Reset failure count on success
@@ -130,7 +131,7 @@ func (cb *CircuitBreaker) RecordFailure() {
 	cb.lastFailureTime = time.Now()
 
 	if cb.debug {
-		println("[DEBUG] [CircuitBreaker] Failure recorded, count:", cb.failureCount)
+		slog.Debug("circuit breaker failure recorded", "layer", "ai_analyzer", "failure_count", cb.failureCount)
 	}
 
 	if cb.state == CircuitHalfOpen {
@@ -138,14 +139,14 @@ func (cb *CircuitBreaker) RecordFailure() {
 		cb.state = CircuitOpen
 		cb.lastStateChange = time.Now()
 		if cb.debug {
-			println("[DEBUG] [CircuitBreaker] Transitioning to open state (failed in half-open)")
+			slog.Debug("circuit breaker state change", "layer", "ai_analyzer", "transition", "open", "reason", "failed in half-open")
 		}
 	} else if cb.state == CircuitClosed && cb.failureCount >= cb.config.FailureThreshold {
 		// Too many failures, open the circuit
 		cb.state = CircuitOpen
 		cb.lastStateChange = time.Now()
 		if cb.debug {
-			println("[DEBUG] [CircuitBreaker] Transitioning to open state (threshold reached)")
+			slog.Debug("circuit breaker state change", "layer", "ai_analyzer", "transition", "open", "reason", "threshold reached")
 		}
 	}
 }

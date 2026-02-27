@@ -176,3 +176,10 @@ data_mapping:
     session_id:
       paths: ["context.session.id", "session_id"]
       required: false
+    context_key:
+      paths: ["context_key", "context.key"]
+      required: false
+    
+    # NOTE: Extra properties (device, country, error_code, cart_value, plan_name, etc.)
+    # do NOT need mappings — they automatically pass through to downstream layers.
+    # Only add a mapping when the source field name differs from Velum's expected name.

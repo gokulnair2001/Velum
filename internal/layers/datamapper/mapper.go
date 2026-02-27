@@ -68,16 +68,24 @@ func (d *DataMapper) Process(input interface{}) (interface{}, error) {
 	}
 }
 
-// mapSingleEvent transforms a single raw event using the configured mapping
+// mapSingleEvent transforms a single raw event using the configured mapping.
+// Unmapped top-level fields are passed through so that downstream layers
+// (Context Enricher, Event Adapter, etc.) can still access extra properties
+// like device, country, error_code, plan_name, and other analytics dimensions.
 func (d *DataMapper) mapSingleEvent(raw map[string]interface{}, index int) (map[string]interface{}, error) {
-	result := make(map[string]interface{})
+	result := make(map[string]interface{}, len(raw))
+
+	// Collect top-level keys consumed by nested mapping paths so we can
+	// exclude the raw wrapper objects (e.g. "data", "payload") from the
+	// passthrough — they are just containers and not meaningful fields.
+	consumedRoots := make(map[string]bool)
 
 	for fieldName, spec := range d.config.Mapping {
 		value, found := d.extractValue(raw, spec.Paths)
 
 		if !found {
 			if spec.Required {
-				return nil, fmt.Errorf("event at index %d missing mandatory field: %s (tried paths: %v)", 
+				return nil, fmt.Errorf("event at index %d missing mandatory field: %s (tried paths: %v)",
 					index, fieldName, spec.Paths)
 			}
 			// Optional field missing - omit entirely
@@ -94,6 +102,24 @@ func (d *DataMapper) mapSingleEvent(raw map[string]interface{}, index int) (map[
 		}
 
 		result[fieldName] = value
+
+		// Track root keys consumed by nested paths so we skip them in passthrough.
+		for _, p := range spec.Paths {
+			if root, _, ok := strings.Cut(p, "."); ok {
+				consumedRoots[root] = true
+			}
+		}
+	}
+
+	// Pass through unmapped top-level fields that are not nested containers.
+	for key, value := range raw {
+		if _, mapped := result[key]; mapped {
+			continue // already set by an explicit mapping
+		}
+		if consumedRoots[key] {
+			continue // container object used by a nested path (e.g. "data", "payload")
+		}
+		result[key] = value
 	}
 
 	return result, nil
@@ -163,10 +189,10 @@ func (d *DataMapper) parseTimestamp(value interface{}, multiplier int64, fieldNa
 		if f, err := strconv.ParseFloat(v, 64); err == nil {
 			return int64(f) * multiplier, nil
 		}
-		return 0, fmt.Errorf("event at index %d: cannot parse '%s' as timestamp for field %s", 
+		return 0, fmt.Errorf("event at index %d: cannot parse '%s' as timestamp for field %s",
 			index, v, fieldName)
 	default:
-		return 0, fmt.Errorf("event at index %d: unsupported type %T for timestamp field %s", 
+		return 0, fmt.Errorf("event at index %d: unsupported type %T for timestamp field %s",
 			index, value, fieldName)
 	}
 }
@@ -175,7 +201,7 @@ func (d *DataMapper) parseTimestamp(value interface{}, multiplier int64, fieldNa
 func (d *DataMapper) parseISO8601(value interface{}, fieldName string, index int) (int64, error) {
 	str, ok := value.(string)
 	if !ok {
-		return 0, fmt.Errorf("event at index %d: expected string for ISO8601 field %s, got %T", 
+		return 0, fmt.Errorf("event at index %d: expected string for ISO8601 field %s, got %T",
 			index, fieldName, value)
 	}
 
@@ -195,7 +221,7 @@ func (d *DataMapper) parseISO8601(value interface{}, fieldName string, index int
 		}
 	}
 
-	return 0, fmt.Errorf("event at index %d: cannot parse '%s' as ISO8601 for field %s", 
+	return 0, fmt.Errorf("event at index %d: cannot parse '%s' as ISO8601 for field %s",
 		index, str, fieldName)
 }
 

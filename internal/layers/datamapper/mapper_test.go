@@ -555,15 +555,15 @@ func TestDataMapper_RealWorldConfig(t *testing.T) {
 	t.Run("batch processing multiple events", func(t *testing.T) {
 		input := []map[string]interface{}{
 			{
-				"meta":      map[string]interface{}{"id": "evt-batch-1", "time": float64(1707500000000)},
-				"action":    "click",
-				"user_id":   "usr-1",
+				"meta":    map[string]interface{}{"id": "evt-batch-1", "time": float64(1707500000000)},
+				"action":  "click",
+				"user_id": "usr-1",
 			},
 			{
-				"data":      map[string]interface{}{"id": "evt-batch-2"},
-				"timestamp": float64(1707500001000),
+				"data":       map[string]interface{}{"id": "evt-batch-2"},
+				"timestamp":  float64(1707500001000),
 				"event_name": "scroll",
-				"context":   map[string]interface{}{"user": map[string]interface{}{"id": "usr-2"}},
+				"context":    map[string]interface{}{"user": map[string]interface{}{"id": "usr-2"}},
 			},
 		}
 
@@ -584,6 +584,85 @@ func TestDataMapper_RealWorldConfig(t *testing.T) {
 			t.Errorf("batch[1].event: expected 'scroll', got '%v'", results[1]["event"])
 		}
 	})
+}
+
+// TestDataMapper_ExtraFieldsPassthrough verifies that unmapped top-level fields
+// (device, country, error_code, etc.) survive mapping and reach downstream layers.
+func TestDataMapper_ExtraFieldsPassthrough(t *testing.T) {
+	cfg := config.DataMappingConfig{
+		Enabled: true,
+		Mapping: map[string]config.FieldMappingSpec{
+			"id": {
+				Paths:    []string{"data.id"},
+				Required: true,
+			},
+			"event": {
+				Paths:    []string{"payload.action", "action"},
+				Required: true,
+			},
+			"user_id": {
+				Paths:    []string{"user_id"},
+				Required: true,
+			},
+		},
+	}
+
+	mapper := New(cfg)
+
+	input := map[string]interface{}{
+		"data": map[string]interface{}{
+			"id": "evt-123",
+		},
+		"payload": map[string]interface{}{
+			"action": "checkout",
+		},
+		"user_id":    "usr-1",
+		"device":     "mobile",
+		"country":    "US",
+		"error_code": "ERR_TIMEOUT",
+		"cart_value": 49.99,
+		"plan_name":  "pro",
+	}
+
+	result, err := mapper.Process(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	mapped := result.(map[string]interface{})
+
+	// Mapped fields should be present
+	if mapped["id"] != "evt-123" {
+		t.Errorf("id: expected 'evt-123', got '%v'", mapped["id"])
+	}
+	if mapped["event"] != "checkout" {
+		t.Errorf("event: expected 'checkout', got '%v'", mapped["event"])
+	}
+	if mapped["user_id"] != "usr-1" {
+		t.Errorf("user_id: expected 'usr-1', got '%v'", mapped["user_id"])
+	}
+
+	// Extra properties should pass through
+	extraFields := map[string]interface{}{
+		"device":     "mobile",
+		"country":    "US",
+		"error_code": "ERR_TIMEOUT",
+		"cart_value": 49.99,
+		"plan_name":  "pro",
+	}
+	for key, expected := range extraFields {
+		if mapped[key] != expected {
+			t.Errorf("%s: expected '%v', got '%v'", key, expected, mapped[key])
+		}
+	}
+
+	// Nested container objects should NOT pass through
+	if _, exists := mapped["data"]; exists {
+		t.Error("nested container 'data' should not pass through")
+	}
+	if _, exists := mapped["payload"]; exists {
+		t.Error("nested container 'payload' should not pass through")
+	}
 }
 
 // TestDataMapper_TimestampFormats tests all supported timestamp formats
