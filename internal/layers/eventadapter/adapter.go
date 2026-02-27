@@ -121,6 +121,21 @@ func (e *EventAdapter) Name() string {
 
 // Process implements the Layer interface
 func (e *EventAdapter) Process(input interface{}) (interface{}, error) {
+	return e.processWithCtx(context.Background(), input)
+}
+
+// ProcessWithContext implements the ContextAwareLayer interface.
+// Extracts the request context so DB lookups respect cancellation.
+func (e *EventAdapter) ProcessWithContext(input interface{}, metadata interface{}) (interface{}, error) {
+	ctx := context.Background()
+	type contextProvider interface{ RequestContext() context.Context }
+	if cp, ok := metadata.(contextProvider); ok {
+		ctx = cp.RequestContext()
+	}
+	return e.processWithCtx(ctx, input)
+}
+
+func (e *EventAdapter) processWithCtx(ctx context.Context, input interface{}) (interface{}, error) {
 	switch v := input.(type) {
 	case string:
 		return e.NormalizeEventString(v), nil
@@ -134,14 +149,14 @@ func (e *EventAdapter) Process(input interface{}) (interface{}, error) {
 		if err := e.validateEvent(v, 0); err != nil {
 			return nil, err
 		}
-		return e.processEventMap(v), nil
+		return e.processEventMapCtx(ctx, v), nil
 	case []map[string]interface{}:
 		results := make([]*ProcessedEvent, 0, len(v))
 		for i, event := range v {
 			if err := e.validateEvent(event, i); err != nil {
 				return nil, err
 			}
-			results = append(results, e.processEventMap(event))
+			results = append(results, e.processEventMapCtx(ctx, event))
 		}
 		return results, nil
 	default:
@@ -174,6 +189,11 @@ func (e *EventAdapter) isValidEvent(event map[string]interface{}) bool {
 
 // processEventMap handles a map-based event and preserves all original fields
 func (e *EventAdapter) processEventMap(event map[string]interface{}) *ProcessedEvent {
+	return e.processEventMapCtx(context.Background(), event)
+}
+
+// processEventMapCtx is like processEventMap but propagates context to DB lookups.
+func (e *EventAdapter) processEventMapCtx(ctx context.Context, event map[string]interface{}) *ProcessedEvent {
 	processed := &ProcessedEvent{
 		OriginalFields: make(map[string]interface{}),
 	}
@@ -184,7 +204,7 @@ func (e *EventAdapter) processEventMap(event map[string]interface{}) *ProcessedE
 	}
 
 	// Build canonical context from property registry (same pattern as vocab lookup)
-	processed.Context = e.buildEventContext(event)
+	processed.Context = e.buildEventContextCtx(ctx, event)
 
 	// Look for event name field and normalize it
 	eventNameFields := []string{"event", "event_name", "eventName", "name", "action", "type"}
@@ -193,7 +213,7 @@ func (e *EventAdapter) processEventMap(event map[string]interface{}) *ProcessedE
 		if val, ok := event[field]; ok {
 			if strVal, ok := val.(string); ok {
 				processed.Event = strVal
-				processed.Normalized = e.NormalizeEventString(strVal)
+				processed.Normalized = e.normalizeEventStringCtx(ctx, strVal)
 				break
 			}
 		}
@@ -204,6 +224,11 @@ func (e *EventAdapter) processEventMap(event map[string]interface{}) *ProcessedE
 
 // NormalizeEventString tokenizes and categorizes a single event string
 func (e *EventAdapter) NormalizeEventString(eventStr string) *NormalizedEvent {
+	return e.normalizeEventStringCtx(context.Background(), eventStr)
+}
+
+// normalizeEventStringCtx is like NormalizeEventString but propagates context to DB lookups.
+func (e *EventAdapter) normalizeEventStringCtx(ctx context.Context, eventStr string) *NormalizedEvent {
 	tokens := e.tokenize(eventStr)
 
 	normalized := &NormalizedEvent{
@@ -231,12 +256,16 @@ func (e *EventAdapter) NormalizeEventString(eventStr string) *NormalizedEvent {
 		}
 		seen[lower] = true
 
-		// Use SQLite as the single source of truth for all vocabulary
-		// (built-in vocabulary is seeded to SQLite at startup)
+		// Use PostgreSQL as the primary source of truth for all vocabulary
+		// (built-in vocabulary is seeded to PostgreSQL at startup, AI-learned
+		// words are added by VocabEnricher). Fall back to the in-memory static
+		// vocabulary if PostgreSQL doesn't have the word — this provides a
+		// safety net during DB issues and guarantees correct synonym mappings
+		// (e.g., player → playback) that AI-learned vocab may lack.
 		categorized := false
 
 		if e.vocabLookup != nil {
-			if category, norm, err := e.vocabLookup.LookupWord(context.Background(), lower); err == nil && category != "" {
+			if category, norm, err := e.vocabLookup.LookupWord(ctx, lower); err == nil && category != "" {
 				// Use the normalized value if available, fall back to original word
 				val := norm
 				if val == "" {
@@ -260,8 +289,11 @@ func (e *EventAdapter) NormalizeEventString(eventStr string) *NormalizedEvent {
 					categorized = true
 				}
 			}
-		} else {
-			// Fallback to static vocabulary if SQLite not configured (backward compatibility)
+		}
+
+		// Fallback to static vocabulary if DB lookup didn't categorize the word
+		// (DB not configured, word not found, or DB error)
+		if !categorized {
 			if norm, ok := e.vocab.Status[lower]; ok {
 				if !contains(normalized.Status, norm) {
 					normalized.Status = append(normalized.Status, norm)
@@ -358,6 +390,10 @@ func (e *EventAdapter) GetVocabulary() *Vocabulary {
 //   - DB registry hit → apply cached role (target or condition)
 //   - Unknown (no DB entry) → skipped (ContextEnricher will learn it for next time)
 func (e *EventAdapter) buildEventContext(event map[string]interface{}) *canonical.EventContext {
+	return e.buildEventContextCtx(context.Background(), event)
+}
+
+func (e *EventAdapter) buildEventContextCtx(ctx context.Context, event map[string]interface{}) *canonical.EventContext {
 	ec := canonical.NewEventContext()
 
 	for key, value := range event {
@@ -380,7 +416,7 @@ func (e *EventAdapter) buildEventContext(event map[string]interface{}) *canonica
 
 		// 3. Look up from property registry DB (like vocab lookup)
 		if e.propertyLookup != nil {
-			role, _, err := e.propertyLookup.LookupProperty(context.Background(), key)
+			role, _, err := e.propertyLookup.LookupProperty(ctx, key)
 			if err == nil && role != "" {
 				switch canonical.PropertyRole(role) {
 				case canonical.RoleDimension:

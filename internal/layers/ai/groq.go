@@ -2,9 +2,11 @@ package ai
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -92,19 +94,33 @@ Output constraints
   pattern_type.
 - If multiple pattern_type values are present, the summary MAY mention them
   collectively without renaming them.
+- EVERY detail MUST include at least one numeric value from the input
+  (affected_users, total_flows, ratio, event counts, etc.).
+- When error codes, device types, or country values appear in the
+  "Event-Level Evidence" or "Context Breakdown" sections, you MUST reference
+  them in the relevant detail. Do NOT omit error codes that are present.
+- When "Sample User Journeys" are provided, use them to describe WHAT
+  specific users experienced (e.g., "User u1 hit buffer_timeout twice
+  before succeeding at lower quality"). Do NOT ignore user-level evidence.
+- Each hypothesis MUST cite a specific data point from the input
+  (e.g., "2 of 3 affected users were on mobile in IN, suggesting a
+  region-specific issue").
+- Generate one detail per detected pattern. Each detail should cover:
+  the pattern type, affected users/total, and any error codes or
+  conditions observed.
 
 REQUIRED OUTPUT FORMAT:
 
 {
-  "summary": "A single sentence describing the observed pattern(s) using only provided pattern_type, flow, and context_key values.",
+  "summary": "A single sentence describing the observed pattern(s) using only provided pattern_type, flow, and context_key values, including affected user counts.",
   "details": [
-    "Detail describing the observation using only fields explicitly present in the input.",
-    "Detail describing baseline availability or comparison status, if applicable.",
-    "Detail about context conditions when context_key is present."
+    "Pattern X in flow Y: N affected users out of M total (Z%). Error codes observed: ... Devices/regions: ...",
+    "Baseline comparison status for the above patterns.",
+    "Additional detail about specific user journeys or conditions when evidence is present."
   ],
   "hypotheses": [
-    "Possible explanation phrased cautiously and without asserting cause or diagnosis.",
-    "Possible explanation phrased cautiously and without asserting cause or diagnosis."
+    "Possible explanation citing specific data points from the input (error codes, user counts, device/country distributions).",
+    "Possible explanation citing specific data points from the input."
   ],
   "confidence_note": "These are hypotheses based on observed behavioral changes."
 }`
@@ -147,10 +163,25 @@ func (a *Analyzer) Name() string {
 
 // Process implements the Layer interface
 func (a *Analyzer) Process(input interface{}) (interface{}, error) {
+	return a.processWithCtx(context.Background(), input)
+}
+
+// ProcessWithContext implements the ContextAwareLayer interface.
+// Extracts the request context from AnalysisContext so HTTP calls to the
+// Groq API are cancelled when the client disconnects.
+func (a *Analyzer) ProcessWithContext(input interface{}, metadata interface{}) (interface{}, error) {
+	ctx := context.Background()
+	if actx, ok := metadata.(*behavior.AnalysisContext); ok && actx != nil {
+		ctx = actx.RequestContext()
+	}
+	return a.processWithCtx(ctx, input)
+}
+
+func (a *Analyzer) processWithCtx(ctx context.Context, input interface{}) (interface{}, error) {
 	// If AI is disabled, pass through the baseline result as AIResult
 	if !a.config.Enabled || a.config.APIKey == "" {
 		if a.config.Debug {
-			fmt.Println("[DEBUG] [AI] AI layer disabled, passing through data")
+			slog.Debug("AI layer disabled, passing through data", "layer", "ai_analyzer")
 		}
 		return a.passThrough(input)
 	}
@@ -159,21 +190,38 @@ func (a *Analyzer) Process(input interface{}) (interface{}, error) {
 	baselineResult, ok := input.(*baseline.BaselineResult)
 	if !ok {
 		if a.config.Debug {
-			fmt.Printf("[DEBUG] [AI] Input is not BaselineResult, passing through (type: %T)\n", input)
+			slog.Debug("input is not BaselineResult, passing through", "layer", "ai_analyzer", "input_type", fmt.Sprintf("%T", input))
 		}
 		return a.passThrough(input)
 	}
 
 	if a.config.Debug {
-		fmt.Println("[DEBUG] [AI] Starting AI analysis...")
-		fmt.Printf("[DEBUG] [AI] Model: %s\n", a.config.Model)
-		fmt.Printf("[DEBUG] [AI] Change results to analyze: %d\n", len(baselineResult.ChangeResults))
+		slog.Debug("starting AI analysis", "layer", "ai_analyzer", "model", a.config.Model, "change_results", len(baselineResult.ChangeResults))
+	}
+
+	// Short-circuit: don't call LLM when there are no patterns to analyze
+	if len(baselineResult.ChangeResults) == 0 {
+		if a.config.Debug {
+			slog.Debug("no patterns detected, skipping LLM call", "layer", "ai_analyzer")
+		}
+		return &AIResult{
+			ChangeResults:    baselineResult.ChangeResults,
+			DetectedPatterns: baselineResult.DetectedPatterns,
+			AnalyzedFlows:    baselineResult.AnalyzedFlows,
+			AIAnalysis: &AnalysisResponse{
+				Summary:        "No significant behavioral patterns detected in this batch.",
+				Details:        []string{},
+				Hypotheses:     []string{},
+				ConfidenceNote: "Insufficient pattern data to generate hypotheses. This is normal for small batches or first-time observations.",
+			},
+			AIEnabled: true,
+		}, nil
 	}
 
 	// Check circuit breaker before making AI request
 	if err := a.circuitBreaker.Allow(); err != nil {
 		if a.config.Debug {
-			fmt.Println("[DEBUG] [AI] Circuit breaker is open, skipping AI analysis")
+			slog.Debug("circuit breaker is open, skipping AI analysis", "layer", "ai_analyzer")
 		}
 		return &AIResult{
 			ChangeResults:    baselineResult.ChangeResults,
@@ -190,11 +238,11 @@ func (a *Analyzer) Process(input interface{}) (interface{}, error) {
 	}
 
 	// Perform AI analysis
-	analysis, err := a.analyze(baselineResult)
+	analysis, err := a.analyze(ctx, baselineResult)
 	if err != nil {
 		a.circuitBreaker.RecordFailure()
 		if a.config.Debug {
-			fmt.Printf("[DEBUG] [AI] Analysis failed: %v\n", err)
+			slog.Debug("AI analysis failed", "layer", "ai_analyzer", "error", err)
 		}
 		// On error, return result without AI analysis but with error info
 		return &AIResult{
@@ -214,8 +262,7 @@ func (a *Analyzer) Process(input interface{}) (interface{}, error) {
 	a.circuitBreaker.RecordSuccess()
 
 	if a.config.Debug {
-		fmt.Println("[DEBUG] [AI] Analysis completed successfully")
-		fmt.Printf("[DEBUG] [AI] Summary: %s\n", analysis.Summary)
+		slog.Debug("AI analysis completed", "layer", "ai_analyzer", "summary", analysis.Summary)
 	}
 
 	return &AIResult{
@@ -248,7 +295,7 @@ func (a *Analyzer) passThrough(input interface{}) (*AIResult, error) {
 }
 
 // analyze performs the actual AI analysis using Groq API
-func (a *Analyzer) analyze(baselineResult *baseline.BaselineResult) (*AnalysisResponse, error) {
+func (a *Analyzer) analyze(ctx context.Context, baselineResult *baseline.BaselineResult) (*AnalysisResponse, error) {
 	// Build the user prompt with baseline data
 	userPrompt, err := a.buildUserPrompt(baselineResult)
 	if err != nil {
@@ -256,7 +303,7 @@ func (a *Analyzer) analyze(baselineResult *baseline.BaselineResult) (*AnalysisRe
 	}
 
 	if a.config.Debug {
-		fmt.Printf("[DEBUG] [AI] Built prompt (%d chars)\n", len(userPrompt))
+		slog.Debug("built AI prompt", "layer", "ai_analyzer", "prompt_chars", len(userPrompt))
 	}
 
 	// Create the Groq request
@@ -273,7 +320,7 @@ func (a *Analyzer) analyze(baselineResult *baseline.BaselineResult) (*AnalysisRe
 			},
 		},
 		Temperature: 0.3, // Low temperature for consistent, factual output
-		MaxTokens:   1024,
+		MaxTokens:   4096,
 	}
 
 	// Make the API request
@@ -283,10 +330,10 @@ func (a *Analyzer) analyze(baselineResult *baseline.BaselineResult) (*AnalysisRe
 	}
 
 	if a.config.Debug {
-		fmt.Println("[DEBUG] [AI] Sending request to Groq API...")
+		slog.Debug("sending request to Groq API", "layer", "ai_analyzer")
 	}
 
-	req, err := http.NewRequest("POST", groqAPIEndpoint, bytes.NewBuffer(reqBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", groqAPIEndpoint, bytes.NewBuffer(reqBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -301,7 +348,7 @@ func (a *Analyzer) analyze(baselineResult *baseline.BaselineResult) (*AnalysisRe
 	defer resp.Body.Close()
 
 	if a.config.Debug {
-		fmt.Printf("[DEBUG] [AI] Groq API response status: %d\n", resp.StatusCode)
+		slog.Debug("Groq API response received", "layer", "ai_analyzer", "status", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -327,8 +374,21 @@ func (a *Analyzer) analyze(baselineResult *baseline.BaselineResult) (*AnalysisRe
 		return nil, fmt.Errorf("no response choices returned")
 	}
 
-	// Parse the AI response content as JSON
+	// Check if the response was truncated (hit max_tokens)
 	content := groqResp.Choices[0].Message.Content
+	finishReason := ""
+	if len(groqResp.Choices) > 0 {
+		finishReason = groqResp.Choices[0].FinishReason
+	}
+
+	if finishReason == "length" {
+		if a.config.Debug {
+			slog.Debug("response truncated, attempting JSON repair", "layer", "ai_analyzer", "finish_reason", finishReason)
+		}
+		// Try to repair the truncated JSON before parsing
+		content = repairTruncatedJSON(content)
+	}
+
 	return a.parseAIResponse(content)
 }
 
@@ -360,10 +420,35 @@ func (a *Analyzer) buildUserPrompt(baselineResult *baseline.BaselineResult) (str
 			firstObsCount, totalChanges))
 	}
 
-	// Add change results if present
+	// Add change results if present — skip context-keyed duplicates to reduce noise.
+	// When both retry_storm:transfer (global) and retry_storm:transfer (context=upi_timeout)
+	// exist, only include the global one with a note about context variants.
 	if len(baselineResult.ChangeResults) > 0 {
 		sb.WriteString("## Detected Changes:\n")
+
+		// Index: collect context variants per pattern+flow, and check which
+		// pattern+flow combos have a global (empty context) entry.
+		contextVariants := make(map[string][]string) // "pattern:flow" → [contextKey1, contextKey2]
+		hasGlobal := make(map[string]bool)           // "pattern:flow" → true if global exists
 		for _, change := range baselineResult.ChangeResults {
+			baseKey := change.PatternType + ":" + change.Flow
+			if change.ContextKey != "" {
+				contextVariants[baseKey] = append(contextVariants[baseKey], change.ContextKey)
+			} else {
+				hasGlobal[baseKey] = true
+			}
+		}
+
+		for _, change := range baselineResult.ChangeResults {
+			// Skip context-keyed entries ONLY when a global entry exists for
+			// the same pattern+flow — the global entry will reference variants.
+			// If there's no global entry, keep the context-keyed one.
+			if change.ContextKey != "" {
+				baseKey := change.PatternType + ":" + change.Flow
+				if hasGlobal[baseKey] {
+					continue
+				}
+			}
 			// Check if baseline is available (not first observation)
 			if change.BaselineStatus == baseline.BaselineStatusFirstObservation {
 				// First observation: only send minimal data without baseline metrics
@@ -390,11 +475,17 @@ func (a *Analyzer) buildUserPrompt(baselineResult *baseline.BaselineResult) (str
 			key := change.PatternType + ":" + change.Flow
 			if ev, ok := patternEvidence[key]; ok {
 				sb.WriteString(fmt.Sprintf("  Severity: %s, Confidence: %s\n", ev.Severity, ev.Confidence))
-				sb.WriteString(fmt.Sprintf("  Affected Users: %d / %d total flows (%.0f%%)\n",
-					ev.AffectedUsers, ev.TotalFlows, ev.Evidence.Ratio*100))
+				pct := ev.Evidence.Ratio * 100
+				sb.WriteString(fmt.Sprintf("  Affected Users: %d / %d eligible flows (%.0f%%)\n",
+					ev.AffectedUsers, ev.TotalFlows, pct))
 				if ev.Evidence.Description != "" {
 					sb.WriteString(fmt.Sprintf("  Evidence: %s\n", ev.Evidence.Description))
 				}
+			}
+
+			// Note context-keyed variants if any
+			if variants, ok := contextVariants[key]; ok && len(variants) > 0 {
+				sb.WriteString(fmt.Sprintf("  Context variants: %s\n", strings.Join(variants, "; ")))
 			}
 
 			sb.WriteString("\n")
@@ -415,6 +506,36 @@ func (a *Analyzer) buildUserPrompt(baselineResult *baseline.BaselineResult) (str
 			}
 		}
 		sb.WriteString("\n")
+	}
+
+	// Append event-level evidence per pattern (error distributions + sample user journeys)
+	eventEvidence := buildEventLevelEvidence(baselineResult.DetectedPatterns, baselineResult.AnalyzedFlows)
+	if len(eventEvidence) > 0 {
+		sb.WriteString("## Event-Level Evidence:\n")
+		sb.WriteString("Per-pattern drill-down with error distributions and sample user journeys.\n")
+		sb.WriteString("Use this data to make your analysis SPECIFIC. Reference error codes and user journeys.\n\n")
+		for key, ev := range eventEvidence {
+			sb.WriteString(fmt.Sprintf("### %s\n", key))
+			if len(ev.ErrorDistribution) > 0 {
+				sb.WriteString("  Error distribution:\n")
+				for code, count := range ev.ErrorDistribution {
+					sb.WriteString(fmt.Sprintf("    %s: %d occurrences\n", code, count))
+				}
+			}
+			if len(ev.StatusDistribution) > 0 {
+				sb.WriteString("  Status distribution:\n")
+				for status, count := range ev.StatusDistribution {
+					sb.WriteString(fmt.Sprintf("    %s: %d occurrences\n", status, count))
+				}
+			}
+			if len(ev.UserJourneys) > 0 {
+				sb.WriteString("  Sample user journeys:\n")
+				for _, uj := range ev.UserJourneys {
+					sb.WriteString(fmt.Sprintf("    User %s: %s\n", uj.UserID, strings.Join(uj.Steps, " → ")))
+				}
+			}
+			sb.WriteString("\n")
+		}
 	}
 
 	sb.WriteString("Provide your analysis in the required JSON format.")
@@ -552,4 +673,274 @@ func (a *Analyzer) parseAIResponse(content string) (*AnalysisResponse, error) {
 		Hypotheses:     []string{},
 		ConfidenceNote: "Raw AI response (structured parsing failed)",
 	}, nil
+}
+
+// repairTruncatedJSON attempts to fix JSON that was truncated mid-generation
+// by the LLM hitting max_tokens. It closes open strings, arrays, and objects.
+func repairTruncatedJSON(content string) string {
+	content = strings.TrimSpace(content)
+
+	// Strip markdown code fences if present
+	if strings.HasPrefix(content, "```json") {
+		content = content[len("```json"):]
+	} else if strings.HasPrefix(content, "```") {
+		content = content[len("```"):]
+	}
+	content = strings.TrimSpace(content)
+
+	// Track nesting state
+	inString := false
+	escaped := false
+	var stack []byte // '{' or '['
+
+	for i := 0; i < len(content); i++ {
+		c := content[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if c == '\\' && inString {
+			escaped = true
+			continue
+		}
+		if c == '"' {
+			inString = !inString
+			continue
+		}
+		if inString {
+			continue
+		}
+		switch c {
+		case '{':
+			stack = append(stack, '{')
+		case '[':
+			stack = append(stack, '[')
+		case '}':
+			if len(stack) > 0 && stack[len(stack)-1] == '{' {
+				stack = stack[:len(stack)-1]
+			}
+		case ']':
+			if len(stack) > 0 && stack[len(stack)-1] == '[' {
+				stack = stack[:len(stack)-1]
+			}
+		}
+	}
+
+	// Close open string
+	if inString {
+		content += "\""
+	}
+
+	// Remove trailing comma (invalid JSON)
+	content = strings.TrimRight(content, " \t\n\r")
+	content = strings.TrimRight(content, ",")
+
+	// Close open brackets/braces in reverse order
+	for i := len(stack) - 1; i >= 0; i-- {
+		if stack[i] == '[' {
+			content += "]"
+		} else if stack[i] == '{' {
+			content += "}"
+		}
+	}
+
+	return content
+}
+
+// --- Event-level evidence for AI prompt enrichment ---
+
+// patternEvidence holds per-pattern drill-down data for the AI prompt.
+type patternEventEvidence struct {
+	ErrorDistribution  map[string]int // error_code → count
+	StatusDistribution map[string]int // status → count (error/failed/cancelled only)
+	UserJourneys       []userJourney  // sample user event sequences
+}
+
+// userJourney is a compact representation of one user's event sequence in a flow.
+type userJourney struct {
+	UserID string
+	Steps  []string // e.g. ["playback_started(start)", "playback_error(error,error_code=drm_license_failed)"]
+}
+
+// buildEventLevelEvidence constructs per-pattern drill-down data from the
+// analyzed flows. For each detected pattern, it finds the affected flows,
+// extracts error code and status distributions, and builds sample user
+// journeys with event-level detail.
+//
+// Returns: map of "pattern_type:flow" → evidence.
+func buildEventLevelEvidence(detected interface{}, analyzedFlows interface{}) map[string]*patternEventEvidence {
+	result := make(map[string]*patternEventEvidence)
+
+	patterns, ok := detected.([]*pattern.DetectedPattern)
+	if !ok || len(patterns) == 0 {
+		return result
+	}
+	flows, ok := analyzedFlows.([]*behavior.AnalyzedFlow)
+	if !ok || len(flows) == 0 {
+		return result
+	}
+
+	// Index flows by flow name for fast lookup
+	flowsByName := make(map[string][]*behavior.AnalyzedFlow)
+	for _, f := range flows {
+		flowsByName[f.Flow] = append(flowsByName[f.Flow], f)
+	}
+
+	for _, p := range patterns {
+		key := string(p.Pattern) + ":" + p.Flow
+		group := flowsByName[p.Flow]
+		if len(group) == 0 {
+			continue
+		}
+
+		ev := &patternEventEvidence{
+			ErrorDistribution:  make(map[string]int),
+			StatusDistribution: make(map[string]int),
+		}
+
+		// Track which users are affected (have the pattern's behavior)
+		affectedUsers := findAffectedUsers(p, group)
+
+		// Collect error/status distributions from ALL events in affected flows
+		for _, flow := range group {
+			if !affectedUsers[flow.UserID] {
+				continue
+			}
+			for _, event := range flow.Events {
+				// Count error/failure statuses
+				if event.Status == "error" || event.Status == "failed" || event.Status == "cancelled" {
+					ev.StatusDistribution[event.Status]++
+				}
+				// Extract error_code from event context conditions
+				if event.Context != nil && len(event.Context.Conditions) > 0 {
+					for condKey, condVal := range event.Context.Conditions {
+						if strings.Contains(strings.ToLower(condKey), "error") ||
+							strings.Contains(strings.ToLower(condKey), "reason") ||
+							strings.Contains(strings.ToLower(condKey), "code") {
+							ev.ErrorDistribution[fmt.Sprintf("%s=%v", condKey, condVal)]++
+						}
+					}
+				}
+			}
+		}
+
+		// Build sample user journeys (up to 3 affected users)
+		journeyCount := 0
+		for _, flow := range group {
+			if journeyCount >= 3 {
+				break
+			}
+			if !affectedUsers[flow.UserID] {
+				continue
+			}
+			// Skip if we already have a journey for this user
+			alreadyHave := false
+			for _, uj := range ev.UserJourneys {
+				if uj.UserID == flow.UserID {
+					alreadyHave = true
+					break
+				}
+			}
+			if alreadyHave {
+				continue
+			}
+
+			uj := userJourney{UserID: flow.UserID}
+			for _, event := range flow.Events {
+				step := event.RawEventName
+				if event.Status != "" {
+					step += "(" + event.Status
+					// Append error_code inline if present
+					if event.Context != nil {
+						for condKey, condVal := range event.Context.Conditions {
+							if strings.Contains(strings.ToLower(condKey), "error") ||
+								strings.Contains(strings.ToLower(condKey), "code") {
+								step += fmt.Sprintf(",%s=%v", condKey, condVal)
+							}
+						}
+					}
+					step += ")"
+				}
+				uj.Steps = append(uj.Steps, step)
+			}
+			ev.UserJourneys = append(ev.UserJourneys, uj)
+			journeyCount++
+		}
+
+		result[key] = ev
+	}
+
+	return result
+}
+
+// findAffectedUsers identifies which users exhibit the given pattern's behavior.
+func findAffectedUsers(p *pattern.DetectedPattern, group []*behavior.AnalyzedFlow) map[string]bool {
+	affected := make(map[string]bool)
+
+	targetBehavior := patternToBehavior(p.Pattern)
+
+	for _, flow := range group {
+		// Check if flow has the target behavior
+		for _, b := range flow.Behaviors {
+			if b == targetBehavior {
+				affected[flow.UserID] = true
+				break
+			}
+		}
+		// Also check for error/failure evidence for retry and failure patterns
+		if p.Pattern == pattern.PatternRetryStorm || p.Pattern == pattern.PatternMaskedFailure {
+			for _, event := range flow.Events {
+				if event.Status == "error" || event.Status == "failed" {
+					affected[flow.UserID] = true
+					break
+				}
+			}
+		}
+		// For silent abandonment, check for abandon or incomplete flows
+		if p.Pattern == pattern.PatternSilentAbandonment {
+			if !flow.IsComplete && containsBehaviorAI(flow.Behaviors, behavior.BehaviorAbandon) {
+				affected[flow.UserID] = true
+			}
+		}
+	}
+
+	// If no specific behavior match, include all users (fallback)
+	if len(affected) == 0 {
+		for _, flow := range group {
+			affected[flow.UserID] = true
+		}
+	}
+
+	return affected
+}
+
+// patternToBehavior maps a pattern type to the primary behavior it detects.
+func patternToBehavior(pt pattern.PatternType) behavior.BehaviorType {
+	switch pt {
+	case pattern.PatternRetryStorm:
+		return behavior.BehaviorRetry
+	case pattern.PatternConfusionLoop:
+		return behavior.BehaviorHesitate
+	case pattern.PatternSilentAbandonment:
+		return behavior.BehaviorAbandon
+	case pattern.PatternEarlyDropoff:
+		return behavior.BehaviorExplore
+	case pattern.PatternBypassBehavior:
+		return behavior.BehaviorBypass
+	case pattern.PatternMaskedFailure:
+		return behavior.BehaviorRetry
+	default:
+		return ""
+	}
+}
+
+// containsBehaviorAI is a local helper (same as pattern package's containsBehavior
+// but accessible here without circular imports).
+func containsBehaviorAI(behaviors []behavior.BehaviorType, target behavior.BehaviorType) bool {
+	for _, b := range behaviors {
+		if b == target {
+			return true
+		}
+	}
+	return false
 }

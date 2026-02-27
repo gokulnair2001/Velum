@@ -258,6 +258,14 @@ func (r *Reconstructor) parseTimestamp(ts string) time.Time {
 	return time.Time{}
 }
 
+// lifecycleSurfaces are infrastructure-level surfaces that should not create
+// standalone flow instances. Events with these surfaces are session/app
+// lifecycle signals, not user intent flows.
+var lifecycleSurfaces = map[string]bool{
+	"session": true,
+	"app":     true,
+}
+
 // reconstructUserFlows reconstructs flow instances for a single user
 func (r *Reconstructor) reconstructUserFlows(userID string, events []*NormalizedEventInput) []*FlowInstance {
 	// Track active flow instances by flow name
@@ -274,11 +282,27 @@ func (r *Reconstructor) reconstructUserFlows(userID string, events []*Normalized
 		statuses := event.Normalized.Status
 		surfaces := event.Normalized.Surface
 
+		// When specific flow tokens co-exist with generic CRUD verbs (creation,
+		// retrieval, etc.), drop the generic ones. For example, "add_to_cart"
+		// produces Flow: ["creation", "cart"] — keep only "cart".
+		if len(flowNames) > 1 {
+			nonGeneric := make([]string, 0, len(flowNames))
+			for _, f := range flowNames {
+				if !genericFlowNames[f] {
+					nonGeneric = append(nonGeneric, f)
+				}
+			}
+			if len(nonGeneric) > 0 {
+				flowNames = nonGeneric
+			}
+		}
+
 		// If no flow detected, use surface as a fallback flow name.
 		// This turns events like "restaurant_list_view" into flow "restaurant"
 		// instead of lumping everything into "unknown".
 		// Also, if the only flow names are generic CRUD verbs (creation, retrieval,
 		// update, deletion, etc.), prefer the surface name which is more meaningful.
+		usedSurfaceFallback := false
 		if len(flowNames) == 0 || allGenericFlows(flowNames) {
 			if len(surfaces) > 0 {
 				// Use the first surface token — in event names the leading noun
@@ -287,13 +311,35 @@ func (r *Reconstructor) reconstructUserFlows(userID string, events []*Normalized
 				// surfaces are [product, cart]; we pick the last non-generic one,
 				// but default to the first which is the domain noun.
 				flowNames = []string{surfaces[0]}
+				usedSurfaceFallback = true
 			} else if len(flowNames) == 0 {
 				flowNames = []string{"unknown"}
+				usedSurfaceFallback = true
 			}
 		}
 
 		// Process each flow the event belongs to
 		for _, flowName := range flowNames {
+			// Skip lifecycle surfaces – these are infrastructure events
+			// (session_start, session_end, app_open, etc.), not user intent flows.
+			if lifecycleSurfaces[flowName] {
+				continue
+			}
+
+			// Surface-fallback folding: when an event has no explicit Flow token
+			// and its surface-derived flow name doesn't match any active flow,
+			// fold it into the most recently active flow. This correctly handles
+			// system events like "driver_assigned" and "driver_cancelled" being
+			// part of the user's active "booking" flow rather than separate flows.
+			// Entry-status events always create their own flows (e.g. ride_started).
+			if usedSurfaceFallback && !r.isEntryStatus(statuses) {
+				if _, exists := activeFlows[flowName]; !exists {
+					if best := r.mostRecentActiveFlow(activeFlows); best != "" {
+						flowName = best
+					}
+				}
+			}
+
 			// Check for timeout on active flow
 			if active, exists := activeFlows[flowName]; exists {
 				if !active.EndTime.IsZero() && timestamp.Sub(active.EndTime) > r.config.FlowTimeout {
@@ -314,7 +360,30 @@ func (r *Reconstructor) reconstructUserFlows(userID string, events []*Normalized
 			// Get or create flow instance
 			active, exists := activeFlows[flowName]
 
-			if !exists || isEntry {
+			// Decide whether to start a new flow or merge into the active one.
+			// Consecutive entry events for the SAME flow (e.g. product_viewed,
+			// product_viewed) should merge into one browsing session, not split
+			// into separate 1-event flows. Only start a new flow on entry when:
+			// (a) no active flow exists, or
+			// (b) the active flow has already progressed beyond entry
+			//     (has action/error/exit events), indicating a new intent.
+			shouldStartNew := false
+			if !exists {
+				shouldStartNew = true
+			} else if isEntry {
+				// Check if the active flow has transitioned beyond just viewing.
+				// If it only has entry-status events, merge into it.
+				hasProgressed := false
+				for _, evt := range active.Events {
+					if evt.Status != "" && !r.isEntryStatus([]string{evt.Status}) {
+						hasProgressed = true
+						break
+					}
+				}
+				shouldStartNew = hasProgressed
+			}
+
+			if shouldStartNew {
 				// Start new flow instance
 				if exists && active != nil {
 					// Complete the previous one first
@@ -406,6 +475,24 @@ func (r *Reconstructor) isSuccessStatus(statuses []string) bool {
 	return false
 }
 
+// mostRecentActiveFlow returns the flow name of the most recently updated
+// active flow, or "" if there are no active flows.
+func (r *Reconstructor) mostRecentActiveFlow(activeFlows map[string]*FlowInstance) string {
+	var bestName string
+	var bestTime time.Time
+	for name, flow := range activeFlows {
+		t := flow.EndTime
+		if t.IsZero() {
+			t = flow.StartTime
+		}
+		if bestName == "" || t.After(bestTime) {
+			bestName = name
+			bestTime = t
+		}
+	}
+	return bestName
+}
+
 // determineContextType determines if flow is explicit_session or windowed
 func (r *Reconstructor) determineContextType(flow *FlowInstance) string {
 	if len(flow.Events) == 0 {
@@ -469,7 +556,6 @@ func toStringSlice(input []interface{}) []string {
 var genericFlowNames = map[string]bool{
 	"creation":  true, // "new" still maps to Flow "creation"
 	"retrieval": true,
-	"search":    true,
 	"filter":    true,
 	"sort":      true,
 }

@@ -48,3 +48,6 @@ logs/
 .env
 .env.local
 .env.*.local
+
+# Misc
+info.md

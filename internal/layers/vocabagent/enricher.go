@@ -3,6 +3,7 @@ package vocabagent
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"unicode"
 )
@@ -35,13 +36,26 @@ func (v *VocabEnricher) Name() string {
 }
 
 // Process implements the Layer interface
-// It extracts words from events, finds unknown ones, classifies them via AI,
-// stores them, and passes through the original input
 func (v *VocabEnricher) Process(input interface{}) (interface{}, error) {
+	return v.processWithCtx(context.Background(), input)
+}
+
+// ProcessWithContext implements the ContextAwareLayer interface.
+// Extracts the request context so storage and AI calls respect cancellation.
+func (v *VocabEnricher) ProcessWithContext(input interface{}, metadata interface{}) (interface{}, error) {
+	ctx := context.Background()
+	type contextProvider interface{ RequestContext() context.Context }
+	if cp, ok := metadata.(contextProvider); ok {
+		ctx = cp.RequestContext()
+	}
+	return v.processWithCtx(ctx, input)
+}
+
+func (v *VocabEnricher) processWithCtx(ctx context.Context, input interface{}) (interface{}, error) {
 	// If storage or agent is not configured, pass through
 	if v.storage == nil || v.agent == nil {
 		if v.debug {
-			fmt.Println("[DEBUG] [VocabEnricher] Storage or agent not configured, passing through")
+			slog.Debug("storage or agent not configured, passing through", "layer", "vocab_enricher")
 		}
 		return input, nil
 	}
@@ -49,18 +63,16 @@ func (v *VocabEnricher) Process(input interface{}) (interface{}, error) {
 	// If agent is disabled, pass through
 	if !v.agent.config.Enabled || v.agent.config.APIKey == "" {
 		if v.debug {
-			fmt.Println("[DEBUG] [VocabEnricher] VocabAgent disabled, passing through")
+			slog.Debug("vocab agent disabled, passing through", "layer", "vocab_enricher")
 		}
 		return input, nil
 	}
-
-	ctx := context.Background()
 
 	// Extract all tokens from input
 	tokens := v.extractTokens(input)
 	if len(tokens) == 0 {
 		if v.debug {
-			fmt.Println("[DEBUG] [VocabEnricher] No tokens extracted, passing through")
+			slog.Debug("no tokens extracted, passing through", "layer", "vocab_enricher")
 		}
 		return input, nil
 	}
@@ -69,7 +81,7 @@ func (v *VocabEnricher) Process(input interface{}) (interface{}, error) {
 	unknownTokens, err := v.findUnknownTokens(ctx, tokens)
 	if err != nil {
 		if v.debug {
-			fmt.Printf("[DEBUG] [VocabEnricher] Error finding unknown tokens: %v\n", err)
+			slog.Debug("error finding unknown tokens", "layer", "vocab_enricher", "error", err)
 		}
 		// Continue anyway, don't block the pipeline
 		return input, nil
@@ -77,23 +89,23 @@ func (v *VocabEnricher) Process(input interface{}) (interface{}, error) {
 
 	if len(unknownTokens) == 0 {
 		if v.debug {
-			fmt.Println("[DEBUG] [VocabEnricher] All tokens known, passing through")
+			slog.Debug("all tokens known, passing through", "layer", "vocab_enricher")
 		}
 		return input, nil
 	}
 
 	// Call VocabAgent to classify unknown tokens
-	result, err := v.agent.ClassifyWords(unknownTokens)
+	result, err := v.agent.ClassifyWordsCtx(ctx, unknownTokens)
 	if err != nil {
 		if v.debug {
-			fmt.Printf("[DEBUG] [VocabEnricher] VocabAgent classification failed: %v\n", err)
+			slog.Debug("vocab agent classification failed", "layer", "vocab_enricher", "error", err)
 		}
 		return input, nil
 	}
 
 	if result.Error != "" {
 		if v.debug {
-			fmt.Printf("[DEBUG] [VocabEnricher] VocabAgent returned error: %s\n", result.Error)
+			slog.Debug("vocab agent returned error", "layer", "vocab_enricher", "error", result.Error)
 		}
 		return input, nil
 	}
@@ -103,10 +115,10 @@ func (v *VocabEnricher) Process(input interface{}) (interface{}, error) {
 		storedCount, err := v.storeClassifiedWords(ctx, result.Classified)
 		if err != nil {
 			if v.debug {
-				fmt.Printf("[DEBUG] [VocabEnricher] Failed to store classified words: %v\n", err)
+				slog.Debug("failed to store classified words", "layer", "vocab_enricher", "error", err)
 			}
 		} else if storedCount > 0 {
-			fmt.Printf("Vocab: Learned and stored %d new words from AI\n", storedCount)
+			slog.Info("learned and stored new words from AI", "layer", "vocab_enricher", "count", storedCount)
 		}
 	}
 

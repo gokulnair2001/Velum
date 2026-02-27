@@ -2,9 +2,11 @@ package propertyagent
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -97,6 +99,11 @@ func NewAgentWithConfig(config *Config) *PropertyAgent {
 // ClassifyProperties classifies a batch of unknown properties into target or condition.
 // Only string-valued (non-numeric, non-dimension) properties reach this method.
 func (a *PropertyAgent) ClassifyProperties(properties []UnknownProperty) (*ClassificationResult, error) {
+	return a.ClassifyPropertiesCtx(context.Background(), properties)
+}
+
+// ClassifyPropertiesCtx is like ClassifyProperties but accepts a context.
+func (a *PropertyAgent) ClassifyPropertiesCtx(ctx context.Context, properties []UnknownProperty) (*ClassificationResult, error) {
 	emptyResult := &ClassificationResult{Target: []string{}, Condition: []string{}}
 
 	if !a.config.Enabled || a.config.APIKey == "" {
@@ -110,16 +117,16 @@ func (a *PropertyAgent) ClassifyProperties(properties []UnknownProperty) (*Class
 	// Check circuit breaker
 	if err := a.circuitBreaker.Allow(); err != nil {
 		if a.config.Debug {
-			fmt.Println("[DEBUG] [PropertyAgent] Circuit breaker is open, skipping classification")
+			slog.Debug("circuit breaker is open, skipping classification", "layer", "property_agent")
 		}
 		return emptyResult, fmt.Errorf("circuit breaker open")
 	}
 
-	result, err := a.callAI(properties)
+	result, err := a.callAI(ctx, properties)
 	if err != nil {
 		a.circuitBreaker.RecordFailure()
 		if a.config.Debug {
-			fmt.Printf("[DEBUG] [PropertyAgent] Classification failed: %v\n", err)
+			slog.Debug("classification failed", "layer", "property_agent", "error", err)
 		}
 		return emptyResult, err
 	}
@@ -129,9 +136,9 @@ func (a *PropertyAgent) ClassifyProperties(properties []UnknownProperty) (*Class
 }
 
 // callAI makes the actual API call to classify properties.
-func (a *PropertyAgent) callAI(properties []UnknownProperty) (*ClassificationResult, error) {
+func (a *PropertyAgent) callAI(ctx context.Context, properties []UnknownProperty) (*ClassificationResult, error) {
 	if a.config.Debug {
-		fmt.Printf("[DEBUG] [PropertyAgent] Calling AI to classify %d properties\n", len(properties))
+		slog.Debug("calling AI to classify properties", "layer", "property_agent", "count", len(properties))
 	}
 
 	// Build user message with property keys and sample values
@@ -162,7 +169,7 @@ func (a *PropertyAgent) callAI(properties []UnknownProperty) (*ClassificationRes
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", groqAPIEndpoint, bytes.NewReader(requestBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", groqAPIEndpoint, bytes.NewReader(requestBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -182,7 +189,7 @@ func (a *PropertyAgent) callAI(properties []UnknownProperty) (*ClassificationRes
 	}
 
 	if a.config.Debug {
-		fmt.Printf("[DEBUG] [PropertyAgent] API response status: %d\n", resp.StatusCode)
+		slog.Debug("API response received", "layer", "property_agent", "status", resp.StatusCode)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -207,7 +214,7 @@ func (a *PropertyAgent) callAI(properties []UnknownProperty) (*ClassificationRes
 	content = strings.TrimSpace(content)
 
 	if a.config.Debug {
-		fmt.Printf("[DEBUG] [PropertyAgent] AI response content: %s\n", content)
+		slog.Debug("AI response content", "layer", "property_agent", "content", content)
 	}
 
 	// Parse the JSON response

@@ -2,9 +2,11 @@ package vocabagent
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -140,7 +142,7 @@ func (v *VocabAgent) Process(input interface{}) (interface{}, error) {
 	// If vocab agent is disabled, pass through the input
 	if !v.config.Enabled || v.config.APIKey == "" {
 		if v.config.Debug {
-			fmt.Println("[DEBUG] [VocabAgent] Vocab agent disabled, passing through data")
+			slog.Debug("vocab agent disabled, passing through", "layer", "vocab_agent")
 		}
 		return input, nil
 	}
@@ -150,19 +152,19 @@ func (v *VocabAgent) Process(input interface{}) (interface{}, error) {
 
 	if len(uncategorizedWords) == 0 {
 		if v.config.Debug {
-			fmt.Println("[DEBUG] [VocabAgent] No uncategorized words found, passing through")
+			slog.Debug("no uncategorized words found, passing through", "layer", "vocab_agent")
 		}
 		return input, nil
 	}
 
 	if v.config.Debug {
-		fmt.Printf("[DEBUG] [VocabAgent] Found %d uncategorized words: %v\n", len(uncategorizedWords), uncategorizedWords)
+		slog.Debug("found uncategorized words", "layer", "vocab_agent", "count", len(uncategorizedWords), "words", uncategorizedWords)
 	}
 
 	// Check circuit breaker before making request
 	if err := v.circuitBreaker.Allow(); err != nil {
 		if v.config.Debug {
-			fmt.Println("[DEBUG] [VocabAgent] Circuit breaker is open, skipping classification")
+			slog.Debug("circuit breaker is open, skipping classification", "layer", "vocab_agent")
 		}
 		return &VocabAgentResult{
 			UncategorizedWords: uncategorizedWords,
@@ -173,11 +175,11 @@ func (v *VocabAgent) Process(input interface{}) (interface{}, error) {
 	}
 
 	// Call AI to classify words
-	classified, err := v.classifyWords(uncategorizedWords)
+	classified, err := v.classifyWords(context.Background(), uncategorizedWords)
 	if err != nil {
 		v.circuitBreaker.RecordFailure()
 		if v.config.Debug {
-			fmt.Printf("[DEBUG] [VocabAgent] Classification failed: %v\n", err)
+			slog.Debug("classification failed", "layer", "vocab_agent", "error", err)
 		}
 		return &VocabAgentResult{
 			UncategorizedWords: uncategorizedWords,
@@ -191,7 +193,7 @@ func (v *VocabAgent) Process(input interface{}) (interface{}, error) {
 
 	totalClassified := len(classified.Status) + len(classified.Surface) + len(classified.Flow)
 	if v.config.Debug {
-		fmt.Printf("[DEBUG] [VocabAgent] Successfully classified %d words\n", totalClassified)
+		slog.Debug("successfully classified words", "layer", "vocab_agent", "count", totalClassified)
 	}
 
 	return &VocabAgentResult{
@@ -203,6 +205,11 @@ func (v *VocabAgent) Process(input interface{}) (interface{}, error) {
 
 // ClassifyWords classifies a list of uncategorized words (public method for direct use)
 func (v *VocabAgent) ClassifyWords(words []string) (*VocabAgentResult, error) {
+	return v.ClassifyWordsCtx(context.Background(), words)
+}
+
+// ClassifyWordsCtx is like ClassifyWords but accepts a context for cancellation.
+func (v *VocabAgent) ClassifyWordsCtx(ctx context.Context, words []string) (*VocabAgentResult, error) {
 	emptyResult := &VocabData{Status: []string{}, Surface: []string{}, Flow: []string{}}
 
 	if !v.config.Enabled || v.config.APIKey == "" {
@@ -231,7 +238,7 @@ func (v *VocabAgent) ClassifyWords(words []string) (*VocabAgentResult, error) {
 		}, nil
 	}
 
-	classified, err := v.classifyWords(words)
+	classified, err := v.classifyWords(ctx, words)
 	if err != nil {
 		v.circuitBreaker.RecordFailure()
 		return &VocabAgentResult{
@@ -325,9 +332,9 @@ func (v *VocabAgent) extractWordsFromInterface(val interface{}, seen map[string]
 }
 
 // classifyWords calls the AI API to classify words
-func (v *VocabAgent) classifyWords(words []string) (*VocabData, error) {
+func (v *VocabAgent) classifyWords(ctx context.Context, words []string) (*VocabData, error) {
 	if v.config.Debug {
-		fmt.Printf("[DEBUG] [VocabAgent] Calling AI to classify: %v\n", words)
+		slog.Debug("calling AI to classify words", "layer", "vocab_agent", "words", words)
 	}
 
 	// Build user message with the words to classify
@@ -355,7 +362,7 @@ func (v *VocabAgent) classifyWords(words []string) (*VocabData, error) {
 	}
 
 	// Make HTTP request
-	req, err := http.NewRequest("POST", groqAPIEndpoint, bytes.NewReader(requestBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", groqAPIEndpoint, bytes.NewReader(requestBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -375,7 +382,7 @@ func (v *VocabAgent) classifyWords(words []string) (*VocabData, error) {
 	}
 
 	if v.config.Debug {
-		fmt.Printf("[DEBUG] [VocabAgent] API response status: %d\n", resp.StatusCode)
+		slog.Debug("API response received", "layer", "vocab_agent", "status", resp.StatusCode)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -401,7 +408,7 @@ func (v *VocabAgent) classifyWords(words []string) (*VocabData, error) {
 	content = strings.TrimSpace(content)
 
 	if v.config.Debug {
-		fmt.Printf("[DEBUG] [VocabAgent] AI response content: %s\n", content)
+		slog.Debug("AI response content", "layer", "vocab_agent", "content", content)
 	}
 
 	// Parse the JSON response from the AI

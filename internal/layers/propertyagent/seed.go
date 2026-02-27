@@ -3,6 +3,7 @@ package propertyagent
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/velum/internal/canonical"
 )
@@ -18,7 +19,7 @@ func SeedBuiltinDimensions(ctx context.Context, storage PropertyStorage) error {
 		if err == nil {
 			if totalEntries, exists := propStats["total_entries"]; exists {
 				if count, ok := totalEntries.(int); ok && count > 0 {
-					fmt.Printf("Property registry already seeded (%d entries), skipping\n", count)
+					slog.Info("property registry already seeded, skipping", "entries", count)
 					return nil
 				}
 			}
@@ -48,7 +49,7 @@ func SeedBuiltinDimensions(ctx context.Context, storage PropertyStorage) error {
 		return fmt.Errorf("failed to seed property registry: %w", err)
 	}
 
-	fmt.Printf("Seeded property registry with %d built-in dimension entries\n", len(entries))
+	slog.Info("seeded property registry with built-in dimension entries", "count", len(entries))
 	return nil
 }
 

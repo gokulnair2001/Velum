@@ -2,6 +2,7 @@ package vocabagent
 
 import (
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -73,7 +74,7 @@ func (cb *CircuitBreaker) Allow() error {
 			cb.state = CircuitHalfOpen
 			cb.lastStateChange = time.Now()
 			if cb.debug {
-				println("[DEBUG] [VocabAgent CircuitBreaker] Transitioning to half-open state")
+				slog.Debug("circuit breaker state change", "layer", "vocab_agent", "transition", "half-open")
 			}
 			return nil
 		}
@@ -102,7 +103,7 @@ func (cb *CircuitBreaker) RecordSuccess() {
 		cb.failureCount = 0
 		cb.lastStateChange = time.Now()
 		if cb.debug {
-			println("[DEBUG] [VocabAgent CircuitBreaker] Transitioning to closed state (recovered)")
+			slog.Debug("circuit breaker state change", "layer", "vocab_agent", "transition", "closed", "reason", "recovered")
 		}
 	} else if cb.state == CircuitClosed {
 		// Reset failure count on success
@@ -123,7 +124,7 @@ func (cb *CircuitBreaker) RecordFailure() {
 	cb.lastFailureTime = time.Now()
 
 	if cb.debug {
-		println("[DEBUG] [VocabAgent CircuitBreaker] Failure recorded, count:", cb.failureCount)
+		slog.Debug("circuit breaker failure recorded", "layer", "vocab_agent", "failure_count", cb.failureCount)
 	}
 
 	if cb.state == CircuitHalfOpen {
@@ -131,14 +132,14 @@ func (cb *CircuitBreaker) RecordFailure() {
 		cb.state = CircuitOpen
 		cb.lastStateChange = time.Now()
 		if cb.debug {
-			println("[DEBUG] [VocabAgent CircuitBreaker] Transitioning to open state (failed in half-open)")
+			slog.Debug("circuit breaker state change", "layer", "vocab_agent", "transition", "open", "reason", "failed in half-open")
 		}
 	} else if cb.state == CircuitClosed && cb.failureCount >= cb.config.FailureThreshold {
 		// Too many failures, open the circuit
 		cb.state = CircuitOpen
 		cb.lastStateChange = time.Now()
 		if cb.debug {
-			println("[DEBUG] [VocabAgent CircuitBreaker] Transitioning to open state (threshold reached)")
+			slog.Debug("circuit breaker state change", "layer", "vocab_agent", "transition", "open", "reason", "threshold reached")
 		}
 	}
 }

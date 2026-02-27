@@ -3,6 +3,7 @@ package vocabagent
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/velum/internal/layers/eventadapter"
 )
@@ -53,8 +54,12 @@ func SeedBuiltinVocabulary(ctx context.Context, storage VocabStorage) error {
 		return fmt.Errorf("failed to seed vocabulary: %w", err)
 	}
 
-	fmt.Printf("Seeded vocabulary with %d built-in entries (status: %d, surface: %d, flow: %d)\n",
-		len(entries), len(vocab.Status), len(vocab.Surface), len(vocab.Flow))
+	slog.Info("seeded vocabulary with built-in entries",
+		"total", len(entries),
+		"status", len(vocab.Status),
+		"surface", len(vocab.Surface),
+		"flow", len(vocab.Flow),
+	)
 
 	return nil
 }

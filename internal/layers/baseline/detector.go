@@ -3,10 +3,12 @@ package baseline
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math"
 	"sync"
 	"time"
 
+	"github.com/velum/internal/layers/behavior"
 	"github.com/velum/internal/layers/pattern"
 	"github.com/velum/internal/storage"
 )
@@ -22,7 +24,7 @@ type Detector struct {
 	config  *Config
 	storage storage.Storage
 
-	// Cache for baseline stats, keyed by "patternType:flow:contextKey"
+	// Cache for baseline stats, keyed by "projectID:patternType:flow:contextKey"
 	statsCache map[string]*cachedBaselineStats
 	cacheMu    sync.RWMutex
 }
@@ -63,10 +65,25 @@ func (d *Detector) Name() string {
 }
 
 // Process implements the Layer interface
-// Processes data for today's date
+// Processes data for today's date with no project scoping (default project)
 func (d *Detector) Process(input interface{}) (interface{}, error) {
 	today := time.Now().UTC().Truncate(24 * time.Hour)
-	return d.processWithDates(input, today, today)
+	return d.processWithDates(context.Background(), input, today, today, "default")
+}
+
+// ProcessWithContext implements the ContextAwareLayer interface.
+// Extracts ProjectID from analysis context and scopes all storage/cache access.
+func (d *Detector) ProcessWithContext(input interface{}, metadata interface{}) (interface{}, error) {
+	projectID := "default"
+	reqCtx := context.Background()
+	if actx, ok := metadata.(*behavior.AnalysisContext); ok && actx != nil {
+		if actx.ProjectID != "" {
+			projectID = actx.ProjectID
+		}
+		reqCtx = actx.RequestContext()
+	}
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	return d.processWithDates(reqCtx, input, today, today, projectID)
 }
 
 // ProcessWithDataDate processes data with a specific data date
@@ -74,35 +91,33 @@ func (d *Detector) Process(input interface{}) (interface{}, error) {
 // This is useful for processing historical/backfill data
 func (d *Detector) ProcessWithDataDate(input interface{}, dataDate time.Time) (interface{}, error) {
 	today := time.Now().UTC().Truncate(24 * time.Hour)
-	return d.processWithDates(input, dataDate.UTC().Truncate(24*time.Hour), today)
+	return d.processWithDates(context.Background(), input, dataDate.UTC().Truncate(24*time.Hour), today, "default")
 }
 
 // ProcessWithDate processes input with a specific date (for testing)
 // Both data date and "today" are set to the provided date
 func (det *Detector) ProcessWithDate(input interface{}, date time.Time) (interface{}, error) {
 	d := date.UTC().Truncate(24 * time.Hour)
-	return det.processWithDates(input, d, d)
+	return det.processWithDates(context.Background(), input, d, d, "default")
 }
 
 // processWithDates is the internal method that handles processing with explicit dates
-func (d *Detector) processWithDates(input interface{}, dataDate time.Time, today time.Time) (interface{}, error) {
+func (d *Detector) processWithDates(ctx context.Context, input interface{}, dataDate time.Time, today time.Time, projectID string) (interface{}, error) {
 	switch v := input.(type) {
 	case *pattern.PatternResult:
-		return d.analyzePatternChanges(v, dataDate, today)
+		return d.analyzePatternChanges(ctx, v, dataDate, today, projectID)
 	default:
 		return input, nil
 	}
 }
 
 // analyzePatternChanges processes pattern results and detects changes
-func (d *Detector) analyzePatternChanges(patternResult *pattern.PatternResult, dataDate time.Time, today time.Time) (*BaselineResult, error) {
-	ctx := context.Background()
-
+func (d *Detector) analyzePatternChanges(ctx context.Context, patternResult *pattern.PatternResult, dataDate time.Time, today time.Time, projectID string) (*BaselineResult, error) {
 	var changeResults []*ChangeResult
 
 	for _, detectedPattern := range patternResult.DetectedPatterns {
-		// Create current snapshot with the data date
-		currentSnapshot := d.createSnapshot(detectedPattern, dataDate)
+		// Create current snapshot with the data date and project scope
+		currentSnapshot := d.createSnapshot(detectedPattern, dataDate, projectID)
 
 		// Check if snapshot date is within baseline window (relative to today)
 		windowStatus := d.checkBaselineWindow(currentSnapshot.Date, today)
@@ -116,9 +131,9 @@ func (d *Detector) analyzePatternChanges(patternResult *pattern.PatternResult, d
 
 		case windowStatusWithinWindow, windowStatusToday:
 			// Data is within baseline window (including today) - compare and store
-			changeResult = d.analyzePatternChange(ctx, currentSnapshot)
+			changeResult = d.analyzePatternChange(ctx, currentSnapshot, projectID)
 			if err := d.storage.StoreSnapshot(ctx, currentSnapshot); err != nil {
-				fmt.Printf("Warning: failed to store snapshot: %v\n", err)
+				slog.Warn("failed to store snapshot", "error", err)
 			}
 		}
 
@@ -181,8 +196,9 @@ func (d *Detector) markOutOfWindow(snapshot *storage.PatternSnapshot) *ChangeRes
 }
 
 // createSnapshot converts a detected pattern to a storable snapshot
-func (d *Detector) createSnapshot(dp *pattern.DetectedPattern, date time.Time) *storage.PatternSnapshot {
+func (d *Detector) createSnapshot(dp *pattern.DetectedPattern, date time.Time, projectID string) *storage.PatternSnapshot {
 	return &storage.PatternSnapshot{
+		ProjectID:      projectID,
 		PatternType:    string(dp.Pattern),
 		Flow:           dp.Flow,
 		ContextKey:     dp.ContextKey,
@@ -195,17 +211,17 @@ func (d *Detector) createSnapshot(dp *pattern.DetectedPattern, date time.Time) *
 	}
 }
 
-// cacheKey generates a cache key for a pattern+flow+context combination
-func cacheKey(patternType, flow, contextKey string) string {
-	return patternType + ":" + flow + ":" + contextKey
+// cacheKey generates a cache key for a project+pattern+flow+context combination
+func cacheKey(projectID, patternType, flow, contextKey string) string {
+	return projectID + ":" + patternType + ":" + flow + ":" + contextKey
 }
 
 // getCachedStats returns cached baseline stats if valid for today, otherwise nil
-func (d *Detector) getCachedStats(patternType, flow, contextKey string, today time.Time) *BaselineStats {
+func (d *Detector) getCachedStats(projectID, patternType, flow, contextKey string, today time.Time) *BaselineStats {
 	d.cacheMu.RLock()
 	defer d.cacheMu.RUnlock()
 
-	key := cacheKey(patternType, flow, contextKey)
+	key := cacheKey(projectID, patternType, flow, contextKey)
 	cached, exists := d.statsCache[key]
 	if !exists {
 		return nil
@@ -220,11 +236,11 @@ func (d *Detector) getCachedStats(patternType, flow, contextKey string, today ti
 }
 
 // setCachedStats stores baseline stats in cache
-func (d *Detector) setCachedStats(patternType, flow, contextKey string, stats *BaselineStats, today time.Time) {
+func (d *Detector) setCachedStats(projectID, patternType, flow, contextKey string, stats *BaselineStats, today time.Time) {
 	d.cacheMu.Lock()
 	defer d.cacheMu.Unlock()
 
-	key := cacheKey(patternType, flow, contextKey)
+	key := cacheKey(projectID, patternType, flow, contextKey)
 	d.statsCache[key] = &cachedBaselineStats{
 		stats:     stats,
 		cachedFor: today,
@@ -232,13 +248,13 @@ func (d *Detector) setCachedStats(patternType, flow, contextKey string, stats *B
 }
 
 // analyzePatternChange compares a pattern snapshot against baseline
-func (d *Detector) analyzePatternChange(ctx context.Context, currentSnapshot *storage.PatternSnapshot) *ChangeResult {
+func (d *Detector) analyzePatternChange(ctx context.Context, currentSnapshot *storage.PatternSnapshot, projectID string) *ChangeResult {
 	today := currentSnapshot.Date.Truncate(24 * time.Hour)
 
 	// Check computation mode - use cache only in "daily" mode
 	if d.config.ComputationMode == "daily" {
 		// Try to get cached baseline stats first
-		if cachedStats := d.getCachedStats(currentSnapshot.PatternType, currentSnapshot.Flow, currentSnapshot.ContextKey, today); cachedStats != nil {
+		if cachedStats := d.getCachedStats(projectID, currentSnapshot.PatternType, currentSnapshot.Flow, currentSnapshot.ContextKey, today); cachedStats != nil {
 			// Use cached stats - no need to fetch from storage
 			if cachedStats.Count < d.config.MinBaselineDays {
 				status := BaselineStatusInsufficient
@@ -254,6 +270,7 @@ func (d *Detector) analyzePatternChange(ctx context.Context, currentSnapshot *st
 	// Fetch baseline snapshots from storage (always in "always" mode, or cache miss in "daily" mode)
 	baselineSnapshots, err := d.storage.FetchBaselineSnapshots(
 		ctx,
+		projectID,
 		currentSnapshot.PatternType,
 		currentSnapshot.Flow,
 		currentSnapshot.ContextKey,
@@ -271,7 +288,7 @@ func (d *Detector) analyzePatternChange(ctx context.Context, currentSnapshot *st
 
 	// Cache the computed stats for today (only in "daily" mode)
 	if d.config.ComputationMode == "daily" {
-		d.setCachedStats(currentSnapshot.PatternType, currentSnapshot.Flow, currentSnapshot.ContextKey, baselineStats, today)
+		d.setCachedStats(projectID, currentSnapshot.PatternType, currentSnapshot.Flow, currentSnapshot.ContextKey, baselineStats, today)
 	}
 
 	// Check for cold start / insufficient data

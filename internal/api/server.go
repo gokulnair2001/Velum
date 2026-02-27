@@ -28,6 +28,13 @@ func NewServer(cfg *config.Config) *Server {
 	}
 }
 
+// Shutdown releases all resources held by the server (DB connections, background
+// goroutines). It should be called after the HTTP server has stopped accepting
+// new requests.
+func (s *Server) Shutdown() error {
+	return s.handler.Close()
+}
+
 // Router returns the configured chi router
 func (s *Server) Router() *chi.Mux {
 	r := chi.NewRouter()
@@ -60,15 +67,18 @@ func (s *Server) Router() *chi.Mux {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 
-	// Security middleware (validates API key if enabled)
-	r.Use(securitymw.SecurityMiddleware(s.cfg))
-
-	// Health check endpoint
+	// Health check endpoint — NOT behind security middleware so load balancers
+	// and k8s probes can reach it without an API key.
 	r.Get("/health", s.handler.Health)
 
-	// API routes
-	r.Route("/api/v1", func(r chi.Router) {
-		r.Post("/analyze", s.handler.Analyze)
+	// Authenticated routes — security middleware applies to this group only.
+	r.Group(func(r chi.Router) {
+		r.Use(securitymw.SecurityMiddleware(s.cfg))
+
+		// API routes
+		r.Route("/api/v1", func(r chi.Router) {
+			r.Post("/analyze", s.handler.Analyze)
+		})
 	})
 
 	return r

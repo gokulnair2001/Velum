@@ -50,6 +50,7 @@ func NewPostgresVocabStorage(cfg *config.PostgresStorageConfig) (*PostgresVocabS
 	db.SetMaxOpenConns(maxConns)
 	db.SetMaxIdleConns(maxConns / 2)
 	db.SetConnMaxLifetime(time.Hour)
+	db.SetConnMaxIdleTime(5 * time.Minute)
 
 	// Test connection
 	if err := db.Ping(); err != nil {

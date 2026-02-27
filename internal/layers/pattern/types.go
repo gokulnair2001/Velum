@@ -10,6 +10,7 @@ const (
 	PatternEarlyDropoff      PatternType = "early_dropoff"
 	PatternBypassBehavior    PatternType = "bypass_behavior"
 	PatternMaskedFailure     PatternType = "masked_failure"
+	PatternFunnelDropoff     PatternType = "funnel_dropoff"
 )
 
 // Severity represents the severity level of a pattern
@@ -44,16 +45,25 @@ type DetectedPattern struct {
 
 // PatternEvidence provides supporting data for the detected pattern
 type PatternEvidence struct {
-	MatchingFlows int      `json:"matching_flows"`
-	Ratio         float64  `json:"ratio"`
-	Description   string   `json:"description"`
-	SampleFlowIDs []string `json:"sample_flow_ids,omitempty"`
+	MatchingFlows  int      `json:"matching_flows"`
+	Ratio          float64  `json:"ratio"`
+	Description    string   `json:"description"`
+	SampleFlowIDs  []string `json:"sample_flow_ids,omitempty"`
+	FunnelID       string   `json:"funnel_id,omitempty"`
+	StepFrom       string   `json:"step_from,omitempty"`
+	StepTo         string   `json:"step_to,omitempty"`
+	ConversionRate float64  `json:"conversion_rate,omitempty"`
 }
 
 // Config holds configuration for pattern detection
 type Config struct {
 	// MinSampleSize is the minimum number of flows required to detect patterns
 	MinSampleSize int
+
+	// MinEventsForDropoff is the minimum number of events a flow must have
+	// before it can be considered an early dropoff. Prevents single-event
+	// browse flows from triggering false positives. Default: 2.
+	MinEventsForDropoff int
 
 	// RetryStormThreshold is the ratio of retry flows to trigger retry_storm
 	RetryStormThreshold float64
@@ -84,6 +94,7 @@ type Config struct {
 func DefaultConfig() *Config {
 	return &Config{
 		MinSampleSize:              3,
+		MinEventsForDropoff:        2,
 		RetryStormThreshold:        0.3,
 		SilentAbandonmentThreshold: 2,
 		EarlyDropoffThreshold:      0.4,
