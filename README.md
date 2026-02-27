@@ -1,350 +1,98 @@
 # Velum
 
-### Transform Analytics Events into Behavioral Intelligence
-
-Velum is a behavioral infrastructure layer that sits between your raw analytics data and your decision-making systems. It automatically detects patterns like user hesitation, retry storms, silent abandonments, and confused navigation — insights that traditional metrics dashboards completely miss.
-
-**Stop asking "what happened?" and start understanding "why users behave this way."**
+Behavioral analytics pipeline for product events. Send raw JSON events, get back detected patterns like retry storms, silent abandonment, confusion loops, and hesitation — with optional AI-powered natural language summaries.
 
 ---
 
-## Why Velum?
+## Quick Start
 
-Traditional analytics tells you *what* happened:
-- 500 button clicks
-- 12% drop-off rate
-- 3.2s average load time
+### Prerequisites
 
-Velum tells you *why* it matters:
-- "Users are hesitating before checkout — 40% pause for 5+ seconds"
-- "Retry storm detected in payment flow — users clicking submit 3+ times"
-- "Silent abandonment pattern — users scroll but never interact"
+- Go 1.23+
+- PostgreSQL
 
----
-
-## 🚀 5-Minute Quick Start
-
-### Step 1: Install
+### Install & Run
 
 ```bash
 git clone https://github.com/your-org/velum.git
 cd velum
 go mod tidy
-```
-
-### Step 2: Configure
-
-```bash
-cp example.config.yaml config.yaml
-```
-
-**Minimal config for local testing** (edit `config.yaml`):
-```yaml
-server:
-  port: "8080"
-
-security:
-  enabled: false  # Disable auth for quick testing
-```
-
-### Step 3: Run
-
-```bash
+cp example.config.yaml config.yaml   # edit with your Postgres credentials
 go run cmd/velum/main.go
 ```
 
-### Step 4: Test
+### Send Events
+
+Every request must include the `X-Project-ID` header. Each project gets isolated storage (per-project tables).
 
 ```bash
-# Health check
-curl http://localhost:8080/health
-
-# Send test events (new format with properties)
 curl -X POST http://localhost:8080/api/v1/analyze \
   -H "Content-Type: application/json" \
+  -H "X-Project-ID: my-app" \
   -d '{
     "events": [
       {
-        "id": "1",
         "event": "checkout_page_view",
         "ts": 1707500000000,
         "user_id": "usr-101",
         "session_id": "sess-abc",
         "device": "mobile",
-        "country": "US",
-        "plan_name": "premium"
+        "country": "US"
       },
       {
-        "id": "2",
         "event": "checkout_payment_click",
         "ts": 1707500015000,
         "user_id": "usr-101",
         "session_id": "sess-abc",
         "device": "mobile",
-        "country": "US",
-        "plan_name": "premium",
-        "cart_value": 120.50
+        "error_code": "card_declined"
       },
       {
-        "id": "3",
-        "event": "checkout_payment_failed",
+        "event": "checkout_payment_click",
         "ts": 1707500045000,
         "user_id": "usr-101",
         "session_id": "sess-abc",
         "device": "mobile",
-        "country": "US",
-        "error_code": "card_declined",
-        "plan_name": "premium",
-        "cart_value": 120.50
+        "error_code": "card_declined"
       }
     ]
   }'
 ```
 
-🎉 **That's it!** You should see behavioral analysis detecting patterns with context-aware baselines (e.g., retry storms segmented by `error_code` and `plan_name`).
+### Health Check
 
----
-
-## 📋 Choose Your Setup
-
-| Scenario | Security | AI Features | Data Mapping |
-|----------|----------|-------------|--------------|
-| **Local Development** | `enabled: false` | Optional | Optional |
-| **Internal API** | `enabled: true` | Recommended | As needed |
-| **Production** | `enabled: true` | Recommended | Recommended |
-
----
-
-## 🔧 Configuration Guide
-
-Velum is configured via `config.yaml`. Here's everything you need to know:
-
-### Security (API Authentication)
-
-```yaml
-security:
-  enabled: true
-  api_key_hash: "your-sha256-hash"
-```
-
-**Generate your API key hash:**
 ```bash
-# Choose a secret key (keep this safe!)
-echo -n "my-secret-api-key" | shasum -a 256
-# Output: e57de863c9fb355e971216e8e5ccb6ca3c63a51d4a017ac55f15f23e78f4e92c
-
-# Use this hash in config.yaml, then include the original key in requests:
-curl -H "X-Infra-Key: my-secret-api-key" http://localhost:8080/api/v1/analyze
-```
-
-**To disable auth** (local dev only):
-```yaml
-security:
-  enabled: false
+curl http://localhost:8080/health
 ```
 
 ---
 
-### Data Mapping (Transform Your Event Format)
-
-If your events don't match Velum's expected format, use data mapping to transform them:
-
-**Expected format:**
-```json
-{"id": "...", "event": "...", "ts": 1234567890, "user_id": "...", "session_id": "..."}
-```
-
-**Your format might be:**
-```json
-{
-  "data": {"id": "evt-123"},
-  "meta": {"time": 1707500000000},
-  "payload": {"event": {"action": "button_click"}},
-  "context": {"user": {"id": "usr-456"}}
-}
-```
-
-**Solution — Enable data mapping:**
-```yaml
-data_mapping:
-  enabled: true
-  mapping:
-    id:
-      paths: ["data.id", "payload.id", "meta.id"]  # Try each path in order
-      required: true                                # Error if all paths fail
-    ts:
-      paths: ["meta.time", "timestamp", "created_at"]
-      format: "epoch_ms"  # Options: epoch_ms, epoch_s, iso8601
-      required: true
-    event:
-      paths: ["payload.event.action", "event_name", "action"]
-      required: true
-    user_id:
-      paths: ["context.user.id", "actor.user_id", "user_id"]
-      required: false  # Optional - anonymous users allowed
-    session_id:
-      paths: ["context.session.id", "session_id"]
-      required: false
-```
-
-**Key concepts:**
-- **paths**: Fallback paths tried in order (dot notation for nested fields)
-- **required**: `true` = error if missing, `false` = field omitted if missing
-- **format**: Timestamp conversion (`epoch_ms`, `epoch_s`, `iso8601` → all convert to epoch_ms)
-
----
-
-### AI Features (Optional but Powerful)
-
-Velum has three AI-powered features. All require a [Groq API key](https://console.groq.com/keys) (free tier available).
-
-#### Context Agent — Auto-classify Event Properties
-
-When Velum encounters unknown event properties (like `error_code`, `plan_name`), it classifies them as **target** or **condition** using AI. Once classified, these properties are used to build context-keyed baselines.
-
-```yaml
-context_agent:
-  enabled: true
-  provider: "groq"
-  api_key: "gsk_your_api_key_here"  # Or set VELUM_CONTEXT_AGENT_API_KEY env var
-  model: "llama-3.1-8b-instant"
-```
-
-> **Note:** Built-in dimensions (device, country, etc.) and numeric measures are resolved automatically without AI. The context agent only handles target vs condition classification.
-
-#### Vocab Agent — Auto-classify Unknown Words
-
-When Velum encounters unknown tokens in your events (like `promo_banner_click`), it can automatically classify them:
-
-```yaml
-vocab_agent:
-  enabled: true
-  provider: "groq"
-  api_key: "gsk_your_api_key_here"  # Or set VELUM_VOCAB_AGENT_API_KEY env var
-  model: "llama-3.1-8b-instant"
-```
-
-#### AI Analyzer — Natural Language Summaries
-
-Get human-readable explanations of detected patterns:
-
-```yaml
-ai_analyzer:
-  enabled: true
-  provider: "groq"
-  api_key: "gsk_your_api_key_here"  # Or set VELUM_AI_API_KEY env var
-  model: "llama-3.1-8b-instant"
-```
-
----
-
-### Server Settings
-
-```yaml
-server:
-  port: "8080"              # Port to listen on
-  host: "0.0.0.0"           # 0.0.0.0 = all interfaces, 127.0.0.1 = localhost only
-  environment: "development" # development, staging, production
-  
-  # Timeouts (prevent hanging connections)
-  read_timeout: "10s"
-  write_timeout: "30s"
-  idle_timeout: "60s"
-  shutdown_timeout: "15s"   # Graceful shutdown wait time
-```
-
-### CORS (Cross-Origin Requests)
-
-```yaml
-cors:
-  allowed_origins: ["*"]                    # Use specific domains in production
-  allowed_methods: ["GET", "POST"]
-  allowed_headers: ["Content-Type", "Authorization"]
-```
-
-### Baseline Detection
-
-Track patterns over time and detect anomalies:
-
-```yaml
-baseline:
-  window_days: 28              # Historical window for baseline
-  min_days: 7                  # Minimum data before computing baseline
-  computation_mode: "daily"    # "daily" (cached) or "always" (real-time)
-  trend_threshold: 0.10        # 10% change = significant trend
-  high_significance_threshold: 0.15
-  std_deviation_multiplier: 2.0
-```
-
-### Resiliency (Rate Limits & Circuit Breaker)
-
-Protect against overload and cascading AI failures:
-
-```yaml
-resiliency:
-  rate_limit_requests: 100  # Max requests per second
-  circuit_breaker:
-    enabled: true
-    failure_threshold: 5    # Open circuit after 5 AI failures
-    reset_timeout: "30s"    # Retry AI after 30s
-```
-
-### Storage
-
-```yaml
-storage:
-  type: "postgres"      # Storage backend: "postgres"
-  retention_days: 90    # Auto-delete pattern snapshots older than this
-
-  # PostgreSQL configuration
-  postgres:
-    host: "localhost"
-    port: 5432
-    database: "velum"
-    user: "velum_user"
-    password: "your_password"
-    ssl_mode: "prefer"        # prefer, require, disable
-    max_connections: 25
-```
-
-**What gets stored**
-- Pattern snapshots and baseline history (not raw events).
-- Storage backend is selected by `storage.type`.
-- Vocab learning is stored in the same PostgreSQL database (vocabulary table).
-
----
-
-## 📡 API Reference
-
-### Authentication
-
-When `security.enabled: true`, include your API key:
-```bash
-curl -H "X-Infra-Key: your-api-key" http://localhost:8080/api/v1/analyze
-```
-
-### Endpoints
+## API
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| GET | `/health` | ❌ | Health check |
-| POST | `/api/v1/analyze` | ✅ | Analyze events |
+| `GET` | `/health` | No | Health check (DB connectivity) |
+| `POST` | `/api/v1/analyze` | Yes (if enabled) | Analyze events |
 
-### Event Format
+### Required Headers
 
-**Without data mapping:**
+| Header | Required | Description |
+|--------|----------|-------------|
+| `X-Project-ID` | Always | Project identifier (1–64 alphanumeric, hyphens, underscores) |
+| `X-Infra-Key` | When `security.enabled: true` | API key for authentication |
+
+### Request Body
+
 ```json
 {
   "events": [
     {
-      "id": "evt-001",
       "event": "checkout_payment_click",
       "ts": 1707500000000,
       "user_id": "usr-123",
       "session_id": "sess-abc",
       "device": "mobile",
       "country": "US",
-      "plan_name": "premium",
       "error_code": "card_declined",
       "cart_value": 120.50
     }
@@ -352,76 +100,23 @@ curl -H "X-Infra-Key: your-api-key" http://localhost:8080/api/v1/analyze
 }
 ```
 
-#### Core Fields
+### Event Fields
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `id` | string | ✅ Required | Unique event ID |
-| `event` | string | ✅ Required | Event name (e.g., `checkout_payment_click`) |
-| `ts` | number/string | ✅ Required | Timestamp (epoch ms or ISO 8601) |
-| `user_id` | string | ⚠️ Recommended | User identifier — needed for session grouping |
-| `session_id` | string | Optional | Session identifier |
+| `event` | string | Yes | Event name (e.g. `checkout_payment_click`) |
+| `ts` | number | Yes | Timestamp in epoch milliseconds |
+| `user_id` | string | Yes | User identifier |
+| `session_id` | string | No | Session identifier |
 
-#### Context Properties
+Any additional properties (`device`, `error_code`, `cart_value`, etc.) are automatically classified into roles — see [Property Roles](#property-roles).
 
-Properties beyond the core fields are automatically classified into four roles and used to build **context-aware baselines**. For example, a retry storm on `checkout` for `error_code=card_declined` is tracked separately from one caused by `error_code=timeout`.
+### Event Naming
 
-| Role | How Resolved | Used In Context Key | Examples |
-|------|-------------|---------------------|----------|
-| **Dimension** | Built-in list (no AI) | ❌ | `device`, `country`, `platform`, `browser`, `channel` |
-| **Target** | AI classification | ✅ | `plan_name`, `product_id`, `feature_name` |
-| **Condition** | AI classification | ✅ | `error_code`, `ab_variant`, `retry_reason` |
-| **Measure** | Type inference (numeric) | ❌ | `cart_value`, `load_time_ms`, `retry_count` |
+Velum parses multiple naming conventions:
 
-> **Context Key**: Baselines are segmented by Targets + Conditions. Dimensions and Measures are tracked but don't split baselines.
-
-#### Recommended Properties
-
-For optimal behavioral analysis, include these properties with every event:
-
-| Property | Type | Role | Why It Matters |
-|----------|------|------|----------------|
-| `device` / `device_type` | string | Dimension | Mobile vs desktop behavior differs significantly |
-| `country` | string | Dimension | Regional patterns and latency differences |
-| `platform` | string | Dimension | OS-specific behavioral patterns |
-
-For richer context-aware baselines, also include domain-specific properties:
-
-| Property | Type | Role | Example Values |
-|----------|------|------|----------------|
-| `error_code` | string | Condition | `card_declined`, `timeout`, `rate_limited` |
-| `plan_name` | string | Target | `free`, `premium`, `enterprise` |
-| `product_id` | string | Target | `sku-123`, `plan-pro` |
-| `ab_variant` | string | Condition | `control`, `variant_a` |
-| `cart_value` | number | Measure | `49.99`, `120.50` |
-| `load_time_ms` | number | Measure | `340`, `1200` |
-
-#### Built-in Dimensions (Full List)
-
-These fields are automatically recognized as dimensions without AI:
-
-| Category | Accepted Field Names |
-|----------|---------------------|
-| **Device** | `device`, `device_type`, `deviceType`, `device_model`, `deviceModel` |
-| **Platform/OS** | `platform`, `os`, `os_name`, `osName`, `os_version`, `osVersion` |
-| **Browser** | `browser`, `browser_name`, `browserName`, `browser_version`, `browserVersion` |
-| **Geography** | `country`, `region`, `city`, `locale`, `timezone`, `tz` |
-| **App Version** | `app_version`, `appVersion`, `build`, `build_version`, `version` |
-| **Attribution** | `channel`, `source`, `medium`, `utm_source`, `utm_medium`, `utm_campaign`, `referrer` |
-| **Environment** | `environment`, `env` |
-| **Network** | `network_type`, `networkType`, `connection_type`, `connectionType` |
-| **Screen** | `screen_resolution`, `viewport` |
-| **Language** | `language`, `lang` |
-| **User Segment** | `user_type`, `userType`, `user_role`, `userRole`, `user_segment`, `userSegment` |
-
-**With data mapping enabled:** Send events in your own format — Velum transforms them automatically.
-
-### Event Naming Conventions
-
-Velum parses multiple formats:
-
-| Format | Example | Parsed As |
-|--------|---------|-----------|
+| Format | Example | Parsed Tokens |
+|--------|---------|---------------|
 | Snake case | `checkout_payment_success` | checkout, payment, success |
 | Kebab case | `home-page-view` | home, page, view |
 | Camel case | `userLoginFailed` | user, login, failed |
@@ -429,140 +124,247 @@ Velum parses multiple formats:
 
 ---
 
-## 🔄 How It Works
+## Pipeline Layers
 
-Velum processes events through a layered pipeline:
+Events flow through an 8-layer pipeline. Each layer enriches or analyzes the data before passing it to the next.
 
 ```
-Raw Events → [Data Mapper] → Context Enricher → Vocab Enricher → Event Adapter → Session Flow → Behavior Analyzer → Pattern Detector → Baseline → [AI Analyzer]
+Raw Events
+  │
+  ▼
+┌──────────────────────────────────────────────────────────┐
+│  0. Context Enricher    ─ classify unknown properties    │
+│  1. Vocab Enricher      ─ classify unknown words         │
+│  2. Event Adapter       ─ normalize into canonical form  │
+│  3. Session Flow        ─ reconstruct user journeys      │
+│  4. Behavior Analyzer   ─ tag behavioral signals         │
+│  5. Pattern Detector    ─ aggregate into patterns        │
+│  6. Baseline Comparator ─ compare against history        │
+│  7. AI Analyzer         ─ generate NL summaries          │
+└──────────────────────────────────────────────────────────┘
+  │
+  ▼
+JSON Response
 ```
 
-| Layer | What It Does |
-|-------|--------------|
-| **Data Mapper** | Transforms your event format to Velum's format (optional) |
-| **Context Enricher** | Discovers unknown properties and classifies via AI (learn-only) |
-| **Vocab Enricher** | Auto-classifies unknown event name tokens via AI (learn-only) |
-| **Event Adapter** | Tokenizes event names → `{status, surface, flow}` + builds context from property registry |
-| **Session Flow** | Groups events by user/session into journeys |
-| **Behavior Analyzer** | Detects hesitation, retries, abandonment |
-| **Pattern Detector** | Aggregates behaviors into context-keyed patterns |
-| **Baseline** | Compares against historical data, segmented by context key |
-| **AI Analyzer** | Generates natural language summaries (optional) |
+### Layer Details
+
+| # | Layer | Purpose | AI Required | Storage |
+|---|-------|---------|-------------|---------|
+| 0 | **Context Enricher** | Discovers unknown event properties (e.g. `error_code`, `plan_name`) and classifies them as **target** or **condition** via AI. Results stored to DB for future requests. Built-in dimensions (`device`, `country`) and numeric measures are resolved without AI. | Yes | PostgreSQL (`property_registry`) |
+| 1 | **Vocab Enricher** | Tokenizes event names, finds unknown words, and classifies them as **status**, **surface**, or **flow** via AI. Learned words stored to DB. | Yes | PostgreSQL (`vocabulary`) |
+| 2 | **Event Adapter** | Normalizes raw events into canonical form. Looks up each token from the vocabulary DB and each property from the property registry. Builds structured context (dimensions, targets, conditions, measures). | No | Reads from DB |
+| 3 | **Session Flow Reconstructor** | Groups events by `user_id` + `session_id` into chronological user journeys. Identifies flow boundaries and transitions. | No | None |
+| 4 | **Behavior Analyzer** | Analyzes flows for behavioral signals: hesitation (long pauses), retries (repeated actions), abandonment (incomplete flows), exploration (non-linear navigation). | No | None |
+| 5 | **Pattern Detector** | Aggregates individual behavioral signals across users into named patterns (retry storm, silent abandonment, confusion loop, etc.). Patterns are keyed by context (e.g. retry storm in payment where `error_code=card_declined`). | No | None |
+| 6 | **Baseline Comparator** | Compares detected patterns against historical snapshots. Identifies trends (increasing, decreasing, stable), significance levels, and first observations. Snapshots stored per project. | No | PostgreSQL (`pattern_snapshots_{project_id}`) |
+| 7 | **AI Analyzer** | Takes baseline comparison results and generates a natural language summary with hypotheses. Only called when patterns exist. Strict prompt rules prevent hallucination. | Yes | None |
 
 ### Detected Patterns
 
 | Pattern | Description |
 |---------|-------------|
-| **Retry Storm** | >30% of users retry the same action |
-| **Silent Abandonment** | Users view but never interact |
-| **Confusion Loop** | Repeated navigation without progress |
-| **Early Dropoff** | Users abandon immediately after starting |
-| **Hesitation** | Long pauses before action |
+| Retry Storm | >30% of users retry the same action repeatedly |
+| Silent Abandonment | Users view content but never interact |
+| Confusion Loop | Repeated navigation without progress |
+| Early Dropoff | Users abandon immediately after starting a flow |
+| Hesitation | Long pauses before taking action |
 
 ---
 
-## 🔤 Vocabulary System
+## Property Roles
 
-Velum classifies event tokens into three categories:
+Extra properties on events are automatically classified into four roles:
 
-| Category | Examples | What It Represents |
-|----------|----------|-------------------|
-| **Status** | click, success, failed, error, pending | What happened |
+| Role | How Resolved | Splits Baselines | Examples |
+|------|-------------|-------------------|----------|
+| **Dimension** | Built-in list | No | `device`, `country`, `platform`, `browser` |
+| **Target** | AI classification | Yes | `plan_name`, `product_id`, `feature_name` |
+| **Condition** | AI classification | Yes | `error_code`, `ab_variant`, `retry_reason` |
+| **Measure** | Type inference (numeric) | No | `cart_value`, `load_time_ms` |
+
+Targets and conditions form the **context key** for baselines. A retry storm on `checkout` where `error_code=card_declined` is tracked separately from `error_code=timeout`.
+
+### Built-in Dimensions
+
+These field names are recognized automatically without AI:
+
+| Category | Accepted Field Names |
+|----------|---------------------|
+| Device | `device`, `device_type`, `deviceType`, `device_model`, `deviceModel` |
+| Platform/OS | `platform`, `os`, `os_name`, `osName`, `os_version`, `osVersion` |
+| Browser | `browser`, `browser_name`, `browserName`, `browser_version`, `browserVersion` |
+| Geography | `country`, `region`, `city`, `locale`, `timezone`, `tz` |
+| App Version | `app_version`, `appVersion`, `build`, `build_version`, `version` |
+| Attribution | `channel`, `source`, `medium`, `utm_source`, `utm_medium`, `utm_campaign`, `referrer` |
+| Network | `network_type`, `networkType`, `connection_type`, `connectionType` |
+| Language | `language`, `lang` |
+| User Segment | `user_type`, `userType`, `user_role`, `userRole`, `user_segment`, `userSegment` |
+
+---
+
+## Vocabulary System
+
+Event name tokens are classified into three categories:
+
+| Category | Examples | Meaning |
+|----------|----------|---------|
+| **Status** | click, success, failed, error, retry | What happened |
 | **Surface** | button, modal, sidebar, checkout, cart | Where it happened |
-| **Flow** | payment, auth, registration, search | User intent |
+| **Flow** | payment, auth, registration, search | User intent/journey |
 
-**Example:** `checkout_payment_failed` → `{surface: checkout, flow: payment, status: failed}`
+Example: `checkout_payment_failed` → `{surface: checkout, flow: payment, status: failed}`
 
-### Handling Unknown Words
+Unknown words are marked as "uncategorized" by default. Enable `vocab_agent` to classify them via AI.
 
-By default, unknown words go to "uncategorized". Enable `vocab_agent` for AI classification:
+---
+
+## Configuration
+
+Velum is configured via `config.yaml`. Environment variables override file values.
+
+```bash
+cp example.config.yaml config.yaml
+```
+
+### Minimal Config
 
 ```yaml
+server:
+  port: "8080"
+  environment: "development"
+
+storage:
+  type: "postgres"
+  postgres:
+    host: "localhost"
+    port: 5432
+    database: "velum"
+    user: "velum_user"
+    password: "your_password"
+
+security:
+  enabled: false
+```
+
+### Security
+
+```yaml
+security:
+  enabled: true
+  api_key_hash: "<sha256-hash-of-your-key>"
+```
+
+Generate hash: `printf "my-secret-key" | shasum -a 256`
+
+Then pass `X-Infra-Key: my-secret-key` on every request.
+
+### AI Features
+
+All three AI layers use [Groq](https://console.groq.com/keys) (free tier available).
+
+```yaml
+context_agent:
+  enabled: true
+  api_key: "gsk_..."      # or env: VELUM_CONTEXT_AGENT_API_KEY
+  model: "llama-3.1-8b-instant"
+
 vocab_agent:
   enabled: true
-  api_key: "your-groq-api-key"
+  api_key: "gsk_..."      # or env: VELUM_VOCAB_AGENT_API_KEY
+  model: "llama-3.1-8b-instant"
+
+ai_analyzer:
+  enabled: true
+  api_key: "gsk_..."      # or env: VELUM_AI_API_KEY
+  model: "llama-3.1-8b-instant"
+```
+
+### Baseline Detection
+
+```yaml
+baseline:
+  window_days: 28           # Historical window
+  min_days: 7               # Min data before computing baseline
+  computation_mode: "daily" # "daily" (cached) or "always"
+  trend_threshold: 0.10     # 10% change = significant
+```
+
+### Resiliency
+
+```yaml
+resiliency:
+  rate_limit_requests: 100  # Max req/s
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 5    # Open after 5 AI failures
+    reset_timeout: "30s"
+```
+
+### Data Mapping
+
+If your events use a different schema, map fields declaratively:
+
+```yaml
+data_mapping:
+  enabled: true
+  mapping:
+    event:
+      paths: ["payload.event.action", "event_name"]
+      required: true
+    ts:
+      paths: ["meta.time", "timestamp"]
+      format: "epoch_ms"
+      required: true
+    user_id:
+      paths: ["context.user.id", "user_id"]
+      required: true
+    session_id:
+      paths: ["context.session.id", "session_id"]
+      required: false
+```
+
+### Environment Variables
+
+| Variable | Overrides |
+|----------|-----------|
+| `VELUM_PORT` | `server.port` |
+| `VELUM_ENV` | `server.environment` |
+| `VELUM_AI_API_KEY` | `ai_analyzer.api_key` |
+| `VELUM_VOCAB_AGENT_API_KEY` | `vocab_agent.api_key` |
+| `VELUM_CONTEXT_AGENT_API_KEY` | `context_agent.api_key` |
+
+---
+
+## Logging
+
+Velum uses Go's `log/slog` structured logging.
+
+| Environment | Format | Level | Output |
+|-------------|--------|-------|--------|
+| `development` | Text (human-readable) | Debug | stdout |
+| `production` | JSON (machine-parseable) | Info | stdout |
+
+Logs go to stdout. In containerized deployments, the orchestrator (Docker, k8s, ECS) captures them automatically.
+
+---
+
+## Multi-Tenancy
+
+Each `X-Project-ID` gets isolated storage. Pattern snapshots are stored in per-project tables (`pattern_snapshots_{project_id}`). Vocabulary and property registry are shared across projects.
+
+---
+
+## Testing
+
+```bash
+go test ./...              # Run all tests
+go test ./... -v           # Verbose
+go test ./... -cover       # With coverage
 ```
 
 ---
 
-## 🌍 Environment Variables
-
-Override config values with environment variables:
-
-| Variable | Overrides | Description |
-|----------|-----------|-------------|
-| `VELUM_PORT` | `server.port` | Server port |
-| `VELUM_ENV` | `server.environment` | Environment mode |
-| `VELUM_AI_API_KEY` | `ai_analyzer.api_key` | AI analyzer API key |
-| `VELUM_VOCAB_AGENT_API_KEY` | `vocab_agent.api_key` | Vocab agent API key |
-| `VELUM_CONTEXT_AGENT_API_KEY` | `context_agent.api_key` | Context agent API key |
-
-```bash
-# Example: Run with custom port and AI key
-VELUM_PORT=3000 VELUM_AI_API_KEY=gsk_xxx go run cmd/velum/main.go
-```
-
----
-
-
-
-## 🧪 Testing
-
-```bash
-# Run all tests
-go test ./...
-
-# Verbose output
-go test ./... -v
-
-# Specific package
-go test ./internal/layers/datamapper/... -v
-
-# With coverage
-go test ./... -cover
-```
-
----
-
-## 🔧 Troubleshooting
-
-### "Invalid API key" error
-
-```bash
-# Regenerate and verify your hash (no trailing newline!)
-printf "your-key" | shasum -a 256
-```
-
-### "Address already in use"
-
-```bash
-# Kill process on port 8080
-lsof -ti:8080 | xargs kill -9
-```
-
-### Events showing empty/unknown flow
-
-1. **Check event naming** — Use descriptive names like `checkout_payment_click`
-2. **Enable vocab_agent** — Auto-classify new words
-3. **Inspect vocabulary database:**
-   ```bash
-   psql -d velum -c "SELECT * FROM vocabulary LIMIT 10;"
-   ```
-
-### Data mapping not working
-
-1. Ensure `data_mapping.enabled: true`
-2. Check paths use dot notation: `context.user.id` not `context/user/id`
-3. Verify required fields have valid fallback paths
-
-### AI features not responding
-
-1. Verify API key is valid at [console.groq.com](https://console.groq.com)
-2. Check circuit breaker isn't open (wait 30s after failures)
-3. Review logs for rate limiting errors
-
----
-
-## 📄 License
+## License
 
 MIT
