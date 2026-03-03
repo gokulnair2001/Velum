@@ -1,7 +1,3 @@
-# Configuration file (contains sensitive data like API keys)
-config.yaml
-config.yml
-
 # Binary
 velum
 
