@@ -34,7 +34,7 @@ storage:
     user: "velum_user"                  # REQUIRED: Database username
     password: ""                        # Set via VELUM_DB_PASSWORD env var
     port: 5432                          # Optional: Database port (default: 5432)
-    ssl_mode: "disable"                 # Optional: SSL mode - require, disable, prefer (default
+    ssl_mode: "require"                 # Optional: SSL mode - require, disable, prefer
 # Baseline detection configuration
 baseline:
   # Number of days to consider for baseline computation
