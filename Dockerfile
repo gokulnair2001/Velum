@@ -16,6 +16,11 @@ FROM alpine:3.20
 
 RUN apk add --no-cache ca-certificates tzdata
 
+# Download AWS RDS CA bundle so SSL connections to RDS are trusted
+RUN wget -qO /usr/local/share/ca-certificates/aws-rds-global-bundle.crt \
+    https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem && \
+    update-ca-certificates
+
 # Non-root user for security
 RUN addgroup -S velum && adduser -S velum -G velum
 
