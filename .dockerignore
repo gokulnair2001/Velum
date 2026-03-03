@@ -7,4 +7,5 @@
 .vscode/
 *.md
 *.log
-velum
+# Only ignore the compiled binary at the root, not cmd/velum/
+/velum
