@@ -1,0 +1,37 @@
+services:
+  # ── Velum API server ──────────────────────────────────
+  velum:
+    build: .
+    container_name: velum
+    ports:
+      - "8080:8080"
+    env_file: .env
+    environment:
+      # Override config.yaml's "localhost" to point at the postgres service
+      VELUM_DB_HOST: postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── PostgreSQL ────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: velum-postgres
+    environment:
+      POSTGRES_DB: velum
+      POSTGRES_USER: velum_user
+      POSTGRES_PASSWORD: ${VELUM_DB_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U velum_user -d velum"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  pgdata:

@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
 )
 
@@ -255,6 +256,11 @@ func DefaultConfig() *Config {
 //
 // File search order: config.yaml, config.yml, /etc/velum/config.yaml
 func Load() *Config {
+	// Load .env file if present (before anything reads env vars).
+	if err := godotenv.Load(); err != nil {
+		slog.Debug("no .env file found, relying on shell environment")
+	}
+
 	cfg := DefaultConfig()
 
 	paths := []string{
@@ -311,6 +317,12 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("VELUM_ENV"); v != "" {
 		cfg.Server.Environment = v
 	}
+	if v := os.Getenv("VELUM_DB_HOST"); v != "" {
+		cfg.Storage.Postgres.Host = v
+	}
+	if v := os.Getenv("VELUM_DB_PASSWORD"); v != "" {
+		cfg.Storage.Postgres.Password = v
+	}
 	if v := os.Getenv("VELUM_AI_API_KEY"); v != "" {
 		cfg.AIAnalyzer.APIKey = v
 	}
@@ -319,5 +331,8 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("VELUM_CONTEXT_AGENT_API_KEY"); v != "" {
 		cfg.ContextAgent.APIKey = v
+	}
+	if v := os.Getenv("VELUM_API_KEY_HASH"); v != "" {
+		cfg.Security.APIKeyHash = v
 	}
 }
