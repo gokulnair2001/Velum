@@ -1,5 +1,5 @@
-# Binary
-velum
+# Binary (only the compiled binary at the project root)
+/velum
 
 # Go build artifacts
 *.exe
