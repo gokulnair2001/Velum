@@ -1,0 +1,148 @@
+# Velum Configuration File
+# Modify these values to customize the behavior of Velum
+
+# Server configuration
+server:
+  port: "8080"
+  host: "0.0.0.0"               # "0.0.0.0" exposes to outside, "127.0.0.1" locks to localhost
+  environment: "development"    # development, staging, production
+  
+  # CRITICAL: Prevent connections from hanging forever
+  read_timeout: "10s"           # Max time to read request body (prevent slow clients)
+  write_timeout: "30s"          # Max time to write response (prevent stuck threads)
+  idle_timeout: "60s"           # Keep-alive connection limit
+  
+  # CRITICAL: Don't kill active jobs when redeploying
+  shutdown_timeout: "15s"       # Wait this long for active requests to finish before forcing kill
+
+# CORS configuration
+cors:
+  allowed_origins: ["*"]                          # OR specific domains like ["https://dashboard.mycompany.com"]
+  allowed_methods: ["GET", "POST"]
+  allowed_headers: ["Content-Type", "Authorization"]
+
+# Storage configuration
+storage:
+  type: "postgres"            # Storage backend: "postgres"
+  retention_days: 90          # How long to keep historical data (days)
+  
+  # PostgreSQL configuration
+  postgres:
+    max_connections: 25                 # Optional: Connection pool size (default: 25)
+    host: "localhost"                   # REQUIRED: Database host/IP
+    database: "velum"                   # REQUIRED: Database name
+    user: "velum_user"                  # REQUIRED: Database username
+    password: ""                        # Set via VELUM_DB_PASSWORD env var
+    port: 5432                          # Optional: Database port (default: 5432)
+    ssl_mode: "disable"                 # Optional: SSL mode - require, disable, prefer (default
+# Baseline detection configuration
+baseline:
+  # Number of days to consider for baseline computation
+  window_days: 28
+  
+  # Minimum days of data required before computing baseline
+  min_days: 7
+  
+  # How often to compute baseline: "daily" (cached once per day) or "always" (every request)
+  computation_mode: "daily"
+  
+  # Threshold for classifying trend as increasing/decreasing (0.10 = 10%)
+  trend_threshold: 0.10
+  
+  # Threshold for high significance changes (0.15 = 15%)
+  high_significance_threshold: 0.15
+  
+  # Standard deviation multiplier for significance detection
+  std_deviation_multiplier: 2.0
+
+# AI Analyzer Layer configuration (generates natural language summaries of baseline analysis)
+ai_analyzer:
+  # Enable or disable AI-powered baseline analysis summaries
+  enabled: true
+  
+  # AI provider: "groq" (Will be extended to support more providers in the future)
+  provider: "groq"
+  
+  # API key — set via VELUM_AI_API_KEY environment variable
+  api_key: ""
+  
+  # Model to use for analysis
+  model: "openai/gpt-oss-120b"
+
+# Vocab Agent Layer configuration (classifies unknown words into surface/status/flow)
+vocab_agent:
+  # Enable or disable vocab agent for dynamic vocabulary expansion
+  enabled: true
+  # Learned vocabulary is stored in the configured PostgreSQL database (vocabulary table)
+  
+  # AI provider: "groq" (Will be extended to support more providers in the future)
+  provider: "groq"
+  
+  # API key — set via VELUM_VOCAB_AGENT_API_KEY environment variable
+  api_key: ""
+  
+  # Model to use for classification
+  model: "openai/gpt-oss-120b"
+
+# Context Agent Layer configuration (classifies event properties into target/condition)
+context_agent:
+  # Enable or disable context agent for automatic property classification
+  enabled: true
+  # Classified properties are stored in the configured PostgreSQL database (property_registry table)
+  # Built-in dimensions and numeric measures are resolved without AI
+  # Only target vs condition classification requires AI (simple binary decision)
+  
+  # AI provider: "groq" (Will be extended to support more providers in the future)
+  provider: "groq"
+  
+  # API key — set via VELUM_CONTEXT_AGENT_API_KEY environment variable
+  api_key: ""
+  
+  # Model to use for classification
+  model: "openai/gpt-oss-120b"
+
+# Resiliency configuration
+resiliency:
+  rate_limit_requests: 100    # Requests per second allowed (protects memory)
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 5      # If 5 AI requests fail...
+    reset_timeout: "30s"      # ...stop calling AI for 30s (Fail fast)
+
+# Security configuration
+security:
+  # Enable or disable API key authentication
+  enabled: true
+  
+  # SHA256 hash of your API key
+  # To generate a hash, run: echo -n "your-secret-key" | sha256sum
+  # Example: For key "my-secret-key", the hash is:
+  # 3e84b4a0d4bc2a9dfc3d6e5f0b1c8a7d6e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b
+  # Set via VELUM_API_KEY_HASH env var, or generate with: echo -n "your-secret-key" | sha256sum
+  api_key_hash: ""
+
+# Data Mapping configuration (transforms raw events to standardized format)
+data_mapping:
+  # Enable or disable declarative data mapping
+  enabled: false
+  
+  # Field mappings: map target fields from source paths
+  # Each field can have multiple fallback paths (tried in order)
+  # Supported formats for timestamps: epoch_ms, epoch_s, iso8601
+  mapping:
+    id:
+      paths: ["data.id", "payload.id", "meta.id"]
+      required: true
+    ts:
+      paths: ["meta.time", "timestamp", "created_at"]
+      format: "epoch_ms"
+      required: true
+    event:
+      paths: ["payload.event.action", "event_name", "action"]
+      required: true
+    user_id:
+      paths: ["context.user.id", "actor.user_id", "user_id"]
+      required: true
+    session_id:
+      paths: ["context.session.id", "session_id"]
+      required: false
