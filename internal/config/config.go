@@ -320,8 +320,22 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("VELUM_DB_HOST"); v != "" {
 		cfg.Storage.Postgres.Host = v
 	}
+	if v := os.Getenv("VELUM_DB_USER"); v != "" {
+		cfg.Storage.Postgres.User = v
+	}
 	if v := os.Getenv("VELUM_DB_PASSWORD"); v != "" {
 		cfg.Storage.Postgres.Password = v
+	}
+	if v := os.Getenv("VELUM_DB_NAME"); v != "" {
+		cfg.Storage.Postgres.Database = v
+	}
+	if v := os.Getenv("VELUM_DB_PORT"); v != "" {
+		if port, err := fmt.Sscanf(v, "%d", &cfg.Storage.Postgres.Port); port != 1 || err != nil {
+			slog.Warn("invalid VELUM_DB_PORT, using default", "value", v)
+		}
+	}
+	if v := os.Getenv("VELUM_DB_SSL_MODE"); v != "" {
+		cfg.Storage.Postgres.SSLMode = v
 	}
 	if v := os.Getenv("VELUM_AI_API_KEY"); v != "" {
 		cfg.AIAnalyzer.APIKey = v
