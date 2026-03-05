@@ -1,0 +1,19 @@
+api.tryvelum.com {
+	# Reverse proxy to the Velum API container
+	reverse_proxy velum:8080
+
+	# Access logging
+	log {
+		output stdout
+		format console
+	}
+
+	# Security headers
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+}

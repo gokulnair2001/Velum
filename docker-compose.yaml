@@ -1,10 +1,26 @@
 services:
+  # ── Caddy reverse proxy ───────────────────────────────
+  caddy:
+    image: caddy:2-alpine
+    container_name: velum-caddy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      velum:
+        condition: service_healthy
+    restart: unless-stopped
+
   # ── Velum API server ──────────────────────────────────
   velum:
     build: .
     container_name: velum
-    ports:
-      - "8080:8080"
+    expose:
+      - "8080"
     env_file: .env
     environment:
       # Override config.yaml's "localhost" to point at the postgres service
@@ -12,6 +28,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
     restart: unless-stopped
 
   # ── PostgreSQL ────────────────────────────────────────
@@ -35,3 +57,5 @@ services:
 
 volumes:
   pgdata:
+  caddy_data:
+  caddy_config:
