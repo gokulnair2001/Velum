@@ -1,20 +1,4 @@
 services:
-  # ── Caddy reverse proxy ───────────────────────────────
-  caddy:
-    image: caddy:2-alpine
-    container_name: velum-caddy
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      velum:
-        condition: service_healthy
-    restart: unless-stopped
-
   # ── Velum API server ──────────────────────────────────
   velum:
     build: .
@@ -22,7 +6,6 @@ services:
     expose:
       - "8080"
     env_file: .env
-    depends_on: []
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
       interval: 10s
@@ -30,7 +13,9 @@ services:
       start_period: 5s
       retries: 3
     restart: unless-stopped
+    networks:
+      - velum-network
 
-volumes:
-  caddy_data:
-  caddy_config:
+networks:
+  velum-network:
+    external: true
