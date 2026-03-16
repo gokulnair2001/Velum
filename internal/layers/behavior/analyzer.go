@@ -130,6 +130,7 @@ func (a *Analyzer) detectBehaviors(flow *AnalyzedFlow) {
 	}
 
 	hasAction := false
+	hasEntry := false
 	hasSuccess := false
 	hasError := false
 	hasExit := false
@@ -141,6 +142,9 @@ func (a *Analyzer) detectBehaviors(flow *AnalyzedFlow) {
 	for i, event := range flow.Events {
 		status := event.Status
 
+		if a.config.EntryStatuses[status] {
+			hasEntry = true
+		}
 		if a.config.ActionStatuses[status] {
 			hasAction = true
 			actionCount++
@@ -193,6 +197,17 @@ func (a *Analyzer) detectBehaviors(flow *AnalyzedFlow) {
 	// Rule F — Hesitate: entry → action → entry again
 	if a.config.EnableHesitation {
 		a.detectHesitation(flow)
+	}
+
+	// Rule G — Bypass: multiple actions without any entry/view phase (e.g. deep-link)
+	// Requires actionCount >= 2 to avoid flagging single transitional clicks
+	if hasAction && !hasEntry && !hasSuccess && actionCount >= 2 {
+		for i, event := range flow.Events {
+			if a.config.ActionStatuses[event.Status] {
+				a.addBehavior(flow, BehaviorBypass, i, "action without prior entry event")
+				break
+			}
+		}
 	}
 
 	// Rule E — Abandon: flow ends without success, last signal is exit or timeout
