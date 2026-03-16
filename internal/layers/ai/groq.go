@@ -323,7 +323,7 @@ func (a *Analyzer) analyze(ctx context.Context, baselineResult *baseline.Baselin
 		MaxTokens:   4096,
 	}
 
-	// Make the API request
+	// Make the API request with retry for rate limits and server errors
 	reqBody, err := json.Marshal(groqReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
@@ -333,31 +333,53 @@ func (a *Analyzer) analyze(ctx context.Context, baselineResult *baseline.Baselin
 		slog.Debug("sending request to Groq API", "layer", "ai_analyzer")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", groqAPIEndpoint, bytes.NewBuffer(reqBody))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
+	var body []byte
+	var statusCode int
+	maxRetries := 3
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, "POST", groqAPIEndpoint, bytes.NewBuffer(reqBody))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request: %w", err)
+		}
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+a.config.APIKey)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+a.config.APIKey)
 
-	resp, err := a.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("API request failed: %w", err)
+		resp, err := a.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("API request failed: %w", err)
+		}
+
+		body, err = io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("failed to read response: %w", err)
+		}
+		statusCode = resp.StatusCode
+
+		// Retry on 429 (rate limit) or 5xx (server error)
+		if (statusCode == 429 || statusCode >= 500) && attempt < maxRetries {
+			backoff := time.Duration(1<<uint(attempt)) * time.Second // 1s, 2s, 4s
+			if a.config.Debug {
+				slog.Debug("retrying Groq API request", "layer", "ai_analyzer",
+					"status", statusCode, "attempt", attempt+1, "backoff", backoff)
+			}
+			select {
+			case <-time.After(backoff):
+				continue
+			case <-ctx.Done():
+				return nil, fmt.Errorf("request cancelled during retry backoff: %w", ctx.Err())
+			}
+		}
+		break
 	}
-	defer resp.Body.Close()
 
 	if a.config.Debug {
-		slog.Debug("Groq API response received", "layer", "ai_analyzer", "status", resp.StatusCode)
+		slog.Debug("Groq API response received", "layer", "ai_analyzer", "status", statusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+	if statusCode != http.StatusOK {
+		return nil, fmt.Errorf("API returned status %d: %s", statusCode, string(body))
 	}
 
 	// Parse the Groq response

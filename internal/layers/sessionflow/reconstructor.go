@@ -365,22 +365,27 @@ func (r *Reconstructor) reconstructUserFlows(userID string, events []*Normalized
 			// product_viewed) should merge into one browsing session, not split
 			// into separate 1-event flows. Only start a new flow on entry when:
 			// (a) no active flow exists, or
-			// (b) the active flow has already progressed beyond entry
-			//     (has action/error/exit events), indicating a new intent.
+			// (b) the active flow has already reached a terminal state
+			//     (exit/error/success event). Re-entry after only action events
+			//     (no termination) indicates hesitation (back-navigation),
+			//     not a new intent.
 			shouldStartNew := false
 			if !exists {
 				shouldStartNew = true
 			} else if isEntry {
-				// Check if the active flow has transitioned beyond just viewing.
-				// If it only has entry-status events, merge into it.
-				hasProgressed := false
+				// Check if the active flow has reached a terminal state.
+				// Note: exit/success events normally complete and remove the
+				// flow (handled below), so this branch mainly guards against
+				// edge cases. If the flow has only seen entry + action events,
+				// a re-entry is hesitation — keep it in the same flow.
+				hasTerminated := false
 				for _, evt := range active.Events {
-					if evt.Status != "" && !r.isEntryStatus([]string{evt.Status}) {
-						hasProgressed = true
+					if r.isExitStatus([]string{evt.Status}) || r.isSuccessStatus([]string{evt.Status}) {
+						hasTerminated = true
 						break
 					}
 				}
-				shouldStartNew = hasProgressed
+				shouldStartNew = hasTerminated
 			}
 
 			if shouldStartNew {
@@ -426,7 +431,9 @@ func (r *Reconstructor) reconstructUserFlows(userID string, events []*Normalized
 
 			// Check for flow completion
 			if isSuccess || isExit {
-				active.IsComplete = isSuccess
+				// "end" is a natural completion (ride_end, call_end) — treat as complete.
+				// Other exits (dismiss, cancelled, exit) are user-initiated interruptions.
+				active.IsComplete = isSuccess || r.firstOrEmpty(statuses) == "end"
 				active.ContextType = r.determineContextType(active)
 				active.Confidence = r.calculateConfidence(active)
 				completedFlows = append(completedFlows, active)

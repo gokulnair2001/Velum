@@ -45,6 +45,9 @@ logs/
 .env.local
 .env.*.local
 
+# Test cases
+test_cases/
+
 # Misc
 info.md
 Project.md
