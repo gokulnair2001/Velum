@@ -2,12 +2,14 @@ package storage
 
 import (
 	"context"
+	"sync"
 	"time"
 )
 
 // InMemoryStorage is a simple in-memory storage for testing/development.
 // Data is isolated per project using a map.
 type InMemoryStorage struct {
+	mu        sync.RWMutex
 	snapshots map[string][]*PatternSnapshot // keyed by projectID
 }
 
@@ -26,6 +28,9 @@ func (s *InMemoryStorage) FetchBaselineSnapshots(ctx context.Context, projectID,
 	if projectID == "" {
 		projectID = "default"
 	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	var results []*PatternSnapshot
 	for _, snap := range s.snapshots[projectID] {
@@ -48,6 +53,10 @@ func (s *InMemoryStorage) StoreSnapshot(ctx context.Context, snapshot *PatternSn
 		pid = "default"
 		snapshot.ProjectID = pid
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	// Check for existing snapshot and update it
 	for i, existing := range s.snapshots[pid] {
 		if existing.PatternType == snapshot.PatternType &&
@@ -80,6 +89,9 @@ func (s *InMemoryStorage) Close() error {
 
 // GetAllSnapshots returns all stored snapshots across all projects (for testing)
 func (s *InMemoryStorage) GetAllSnapshots() []*PatternSnapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	var all []*PatternSnapshot
 	for _, snaps := range s.snapshots {
 		all = append(all, snaps...)
@@ -89,6 +101,9 @@ func (s *InMemoryStorage) GetAllSnapshots() []*PatternSnapshot {
 
 // GetStats returns storage statistics
 func (s *InMemoryStorage) GetStats(ctx context.Context) (map[string]interface{}, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	stats := make(map[string]interface{})
 	stats["storage_type"] = "in_memory"
 

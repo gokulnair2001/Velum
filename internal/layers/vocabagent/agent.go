@@ -10,11 +10,12 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/velum/internal/config"
 )
 
 const (
-	groqAPIEndpoint = "https://api.groq.com/openai/v1/chat/completions"
-	systemPrompt    = `You are a vocabulary classification agent for a product analytics system.
+	systemPrompt = `You are a vocabulary classification agent for a product analytics system.
 
 You are a vocabulary classification assistant for a product analytics system.
 
@@ -135,6 +136,11 @@ func NewWithConfig(config *Config) *VocabAgent {
 // Name returns the layer identifier
 func (v *VocabAgent) Name() string {
 	return "vocab_agent"
+}
+
+// apiEndpoint returns the configured API endpoint, resolving from provider if base_url is not set.
+func (v *VocabAgent) apiEndpoint() string {
+	return config.ResolveProviderURL(v.config.Provider, v.config.BaseURL)
 }
 
 // Process implements the Layer interface
@@ -362,7 +368,7 @@ func (v *VocabAgent) classifyWords(ctx context.Context, words []string) (*VocabD
 	}
 
 	// Make HTTP request
-	req, err := http.NewRequestWithContext(ctx, "POST", groqAPIEndpoint, bytes.NewReader(requestBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", v.apiEndpoint(), bytes.NewReader(requestBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}

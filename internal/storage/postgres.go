@@ -74,7 +74,21 @@ func NewPostgresStorage(config *config.PostgresStorageConfig, retentionDays int)
 // Project IDs are validated at the HTTP layer ([a-zA-Z0-9_-]{1,64}),
 // so we just normalize to a safe Postgres identifier.
 func tableName(projectID string) string {
-	safe := strings.ReplaceAll(strings.ToLower(projectID), "-", "_")
+	safe := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+			return r
+		}
+		if r >= 'A' && r <= 'Z' {
+			return r + ('a' - 'A') // toLower
+		}
+		if r == '-' {
+			return '_'
+		}
+		return -1 // drop unexpected characters
+	}, projectID)
+	if safe == "" {
+		safe = "default"
+	}
 	return "pattern_snapshots_" + safe
 }
 

@@ -111,9 +111,11 @@ func NewHandler(cfg *config.Config) *Handler {
 		}
 
 		contextAgentConfig := &propertyagent.Config{
-			Enabled: cfg.ContextAgent.Enabled,
-			APIKey:  cfg.ContextAgent.APIKey,
-			Model:   cfg.ContextAgent.Model,
+			Enabled:  cfg.ContextAgent.Enabled,
+			Provider: cfg.ContextAgent.Provider,
+			BaseURL:  cfg.ContextAgent.BaseURL,
+			APIKey:   cfg.ContextAgent.APIKey,
+			Model:    cfg.ContextAgent.Model,
 			Debug:   cfg.Server.Environment == "development",
 			CircuitBreaker: propertyagent.CircuitBreakerConfig{
 				Enabled:          cfg.Resiliency.CircuitBreaker.Enabled,
@@ -139,9 +141,11 @@ func NewHandler(cfg *config.Config) *Handler {
 		}
 
 		vocabAgentConfig := &vocabagent.Config{
-			Enabled: cfg.VocabAgent.Enabled,
-			APIKey:  cfg.VocabAgent.APIKey,
-			Model:   cfg.VocabAgent.Model,
+			Enabled:  cfg.VocabAgent.Enabled,
+			Provider: cfg.VocabAgent.Provider,
+			BaseURL:  cfg.VocabAgent.BaseURL,
+			APIKey:   cfg.VocabAgent.APIKey,
+			Model:    cfg.VocabAgent.Model,
 			Debug:   cfg.Server.Environment == "development",
 			CircuitBreaker: vocabagent.CircuitBreakerConfig{
 				Enabled:          cfg.Resiliency.CircuitBreaker.Enabled,
@@ -205,9 +209,11 @@ func NewHandler(cfg *config.Config) *Handler {
 		}
 
 		aiConfig := &ai.Config{
-			Enabled: cfg.AIAnalyzer.Enabled,
-			APIKey:  cfg.AIAnalyzer.APIKey,
-			Model:   cfg.AIAnalyzer.Model,
+			Enabled:  cfg.AIAnalyzer.Enabled,
+			Provider: cfg.AIAnalyzer.Provider,
+			BaseURL:  cfg.AIAnalyzer.BaseURL,
+			APIKey:   cfg.AIAnalyzer.APIKey,
+			Model:    cfg.AIAnalyzer.Model,
 			Debug:   cfg.Server.Environment == "development",
 			CircuitBreaker: ai.CircuitBreakerConfig{
 				Enabled:          cfg.Resiliency.CircuitBreaker.Enabled,
@@ -342,6 +348,9 @@ type AnalysisResponse struct {
 // maxRequestBodySize is the maximum allowed request body size (10MB)
 const maxRequestBodySize = 10 * 1024 * 1024
 
+// maxEventsPerRequest is the maximum number of events allowed in a single request
+const maxEventsPerRequest = 10000
+
 // ProjectIDHeader is the HTTP header that identifies the project.
 const ProjectIDHeader = "X-Project-ID"
 
@@ -392,6 +401,15 @@ func (h *Handler) Analyze(w http.ResponseWriter, r *http.Request) {
 		respondJSON(w, http.StatusBadRequest, AnalysisResponse{
 			Success: false,
 			Message: "At least 1 event is required in the 'events' array.",
+		})
+		return
+	}
+
+	// Validate maximum event count to prevent resource exhaustion
+	if len(req.Events) > maxEventsPerRequest {
+		respondJSON(w, http.StatusBadRequest, AnalysisResponse{
+			Success: false,
+			Message: fmt.Sprintf("Too many events. Maximum allowed is %d per request.", maxEventsPerRequest),
 		})
 		return
 	}
