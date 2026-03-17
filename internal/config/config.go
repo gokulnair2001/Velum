@@ -135,9 +135,10 @@ type BaselineConfig struct {
 // When enabled, baseline comparison results are summarised in natural language.
 type AIAnalyzerConfig struct {
 	Enabled  bool   `yaml:"enabled"`
-	Provider string `yaml:"provider"` // "groq"
+	Provider string `yaml:"provider"` // "groq" (default), "openai", or any OpenAI-compatible provider
+	BaseURL  string `yaml:"base_url"` // Optional: override the auto-resolved provider URL (for custom/self-hosted endpoints)
 	APIKey   string `yaml:"api_key"`  // Env override: VELUM_AI_API_KEY
-	Model    string `yaml:"model"`    // e.g. "llama-3.1-8b-instant"
+	Model    string `yaml:"model"`    // e.g. "llama-3.1-8b-instant", "gpt-4o-mini"
 }
 
 // VocabAgentConfig toggles the Vocab Enricher layer (Layer 1).
@@ -145,7 +146,8 @@ type AIAnalyzerConfig struct {
 // status / surface / flow and stored to the vocabulary table.
 type VocabAgentConfig struct {
 	Enabled  bool   `yaml:"enabled"`
-	Provider string `yaml:"provider"` // "groq"
+	Provider string `yaml:"provider"` // "groq" (default), "openai", or any OpenAI-compatible provider
+	BaseURL  string `yaml:"base_url"` // Optional: override the auto-resolved provider URL
 	APIKey   string `yaml:"api_key"`  // Env override: VELUM_VOCAB_AGENT_API_KEY
 	Model    string `yaml:"model"`
 }
@@ -155,7 +157,8 @@ type VocabAgentConfig struct {
 // target / condition and stored to the property_registry table.
 type ContextAgentConfig struct {
 	Enabled  bool   `yaml:"enabled"`
-	Provider string `yaml:"provider"` // "groq"
+	Provider string `yaml:"provider"` // "groq" (default), "openai", or any OpenAI-compatible provider
+	BaseURL  string `yaml:"base_url"` // Optional: override the auto-resolved provider URL
 	APIKey   string `yaml:"api_key"`  // Env override: VELUM_CONTEXT_AGENT_API_KEY
 	Model    string `yaml:"model"`
 }
@@ -349,4 +352,28 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("VELUM_API_KEY_HASH"); v != "" {
 		cfg.Security.APIKeyHash = v
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Provider URL resolution
+// ---------------------------------------------------------------------------
+
+// providerURLs maps known provider names to their chat completions endpoint.
+var providerURLs = map[string]string{
+	"groq":   "https://api.groq.com/openai/v1/chat/completions",
+	"openai": "https://api.openai.com/v1/chat/completions",
+}
+
+// ResolveProviderURL returns the API endpoint for the given provider and
+// optional base_url override. If baseURL is non-empty it is returned as-is.
+// Otherwise the provider name is looked up in the built-in map. Unknown
+// providers fall back to the Groq endpoint.
+func ResolveProviderURL(provider, baseURL string) string {
+	if baseURL != "" {
+		return baseURL
+	}
+	if url, ok := providerURLs[provider]; ok {
+		return url
+	}
+	return providerURLs["groq"]
 }

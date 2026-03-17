@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/velum/internal/canonical"
@@ -14,14 +15,13 @@ import (
 type Reconstructor struct {
 	config      *Config
 	idGenerator func() string
-	idCounter   int
+	idCounter   atomic.Int64
 }
 
 // New creates a new Reconstructor with default config
 func New() *Reconstructor {
 	r := &Reconstructor{
-		config:    DefaultConfig(),
-		idCounter: 0,
+		config: DefaultConfig(),
 	}
 	r.idGenerator = r.defaultIDGenerator
 	return r
@@ -30,8 +30,7 @@ func New() *Reconstructor {
 // NewWithConfig creates a Reconstructor with custom config
 func NewWithConfig(config *Config) *Reconstructor {
 	r := &Reconstructor{
-		config:    config,
-		idCounter: 0,
+		config: config,
 	}
 	r.idGenerator = r.defaultIDGenerator
 	return r
@@ -312,7 +311,7 @@ func (r *Reconstructor) reconstructUserFlows(userID string, events []*Normalized
 				// but default to the first which is the domain noun.
 				flowNames = []string{surfaces[0]}
 				usedSurfaceFallback = true
-			} else if len(flowNames) == 0 {
+			} else {
 				flowNames = []string{"unknown"}
 				usedSurfaceFallback = true
 			}
@@ -542,8 +541,8 @@ func (r *Reconstructor) firstOrEmpty(slice []string) string {
 
 // defaultIDGenerator generates unique flow instance IDs
 func (r *Reconstructor) defaultIDGenerator() string {
-	r.idCounter++
-	return fmt.Sprintf("flow_%d_%d", time.Now().UnixNano(), r.idCounter)
+	counter := r.idCounter.Add(1)
+	return fmt.Sprintf("flow_%d_%d", time.Now().UnixNano(), counter)
 }
 
 // Helper function to convert []interface{} to []string

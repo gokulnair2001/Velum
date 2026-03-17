@@ -12,14 +12,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/velum/internal/config"
 	"github.com/velum/internal/layers/baseline"
 	"github.com/velum/internal/layers/behavior"
 	"github.com/velum/internal/layers/pattern"
 )
 
 const (
-	groqAPIEndpoint = "https://api.groq.com/openai/v1/chat/completions"
-	systemPrompt    = `You are a product analytics assistant.
+	systemPrompt = `You are a product analytics assistant.
 
 You are a product analytics interpretation assistant.
 
@@ -159,6 +159,11 @@ func NewWithConfig(config *Config) *Analyzer {
 // Name returns the layer identifier
 func (a *Analyzer) Name() string {
 	return "ai_analyzer"
+}
+
+// apiEndpoint returns the configured API endpoint, resolving from provider if base_url is not set.
+func (a *Analyzer) apiEndpoint() string {
+	return config.ResolveProviderURL(a.config.Provider, a.config.BaseURL)
 }
 
 // Process implements the Layer interface
@@ -337,7 +342,7 @@ func (a *Analyzer) analyze(ctx context.Context, baselineResult *baseline.Baselin
 	var statusCode int
 	maxRetries := 3
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		req, err := http.NewRequestWithContext(ctx, "POST", groqAPIEndpoint, bytes.NewBuffer(reqBody))
+		req, err := http.NewRequestWithContext(ctx, "POST", a.apiEndpoint(), bytes.NewBuffer(reqBody))
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request: %w", err)
 		}

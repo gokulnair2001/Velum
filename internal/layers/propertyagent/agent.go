@@ -10,10 +10,11 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/velum/internal/config"
 )
 
 const (
-	groqAPIEndpoint      = "https://api.groq.com/openai/v1/chat/completions"
 	propertySystemPrompt = `You are a property classification agent for a product analytics system.
 
 Your task is to classify unknown event property keys into exactly one of two roles:
@@ -96,6 +97,11 @@ func NewAgentWithConfig(config *Config) *PropertyAgent {
 	}
 }
 
+// apiEndpoint returns the configured API endpoint, resolving from provider if base_url is not set.
+func (a *PropertyAgent) apiEndpoint() string {
+	return config.ResolveProviderURL(a.config.Provider, a.config.BaseURL)
+}
+
 // ClassifyProperties classifies a batch of unknown properties into target or condition.
 // Only string-valued (non-numeric, non-dimension) properties reach this method.
 func (a *PropertyAgent) ClassifyProperties(properties []UnknownProperty) (*ClassificationResult, error) {
@@ -169,7 +175,7 @@ func (a *PropertyAgent) callAI(ctx context.Context, properties []UnknownProperty
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", groqAPIEndpoint, bytes.NewReader(requestBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", a.apiEndpoint(), bytes.NewReader(requestBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}

@@ -32,6 +32,8 @@ type ClassificationResult struct {
 // Config holds configuration for the Property Agent.
 type Config struct {
 	Enabled        bool
+	Provider       string
+	BaseURL        string
 	APIKey         string
 	Model          string
 	Debug          bool
@@ -49,6 +51,7 @@ type CircuitBreakerConfig struct {
 func DefaultConfig() *Config {
 	return &Config{
 		Enabled: false,
+		BaseURL: "",
 		APIKey:  "",
 		Model:   "llama-3.1-8b-instant",
 		CircuitBreaker: CircuitBreakerConfig{

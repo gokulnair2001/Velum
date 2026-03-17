@@ -60,8 +60,12 @@ ai_analyzer:
   # Enable or disable AI-powered baseline analysis summaries
   enabled: true
   
-  # AI provider: "groq" (Will be extended to support more providers in the future)
+  # AI provider: "groq" (default), "openai", or any OpenAI-compatible provider
+  # URL is auto-resolved from provider name. To use a custom endpoint, set base_url.
   provider: "groq"
+  
+  # Optional: override the auto-resolved provider URL (for self-hosted/custom endpoints)
+  # base_url: "http://localhost:11434/v1/chat/completions"
   
   # API key — set via VELUM_AI_API_KEY environment variable
   api_key: ""
@@ -75,8 +79,11 @@ vocab_agent:
   enabled: true
   # Learned vocabulary is stored in the configured PostgreSQL database (vocabulary table)
   
-  # AI provider: "groq" (Will be extended to support more providers in the future)
+  # AI provider: "groq" (default), "openai", or any OpenAI-compatible provider
   provider: "groq"
+  
+  # Optional: override the auto-resolved provider URL
+  # base_url: "http://localhost:11434/v1/chat/completions"
   
   # API key — set via VELUM_VOCAB_AGENT_API_KEY environment variable
   api_key: ""
@@ -92,8 +99,11 @@ context_agent:
   # Built-in dimensions and numeric measures are resolved without AI
   # Only target vs condition classification requires AI (simple binary decision)
   
-  # AI provider: "groq" (Will be extended to support more providers in the future)
+  # AI provider: "groq" (default), "openai", or any OpenAI-compatible provider
   provider: "groq"
+  
+  # Optional: override the auto-resolved provider URL
+  # base_url: "http://localhost:11434/v1/chat/completions"
   
   # API key — set via VELUM_CONTEXT_AGENT_API_KEY environment variable
   api_key: ""

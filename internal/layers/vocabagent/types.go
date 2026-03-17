@@ -22,7 +22,13 @@ type Config struct {
 	// Enabled determines if vocab agent is active
 	Enabled bool
 
-	// APIKey is the Groq API key
+	// Provider is the LLM provider name ("groq", "openai", etc.)
+	Provider string
+
+	// BaseURL optionally overrides the auto-resolved provider URL
+	BaseURL string
+
+	// APIKey is the API key for the LLM provider
 	APIKey string
 
 	// Model is the LLM model to use
@@ -51,6 +57,7 @@ type CircuitBreakerConfig struct {
 func DefaultConfig() *Config {
 	return &Config{
 		Enabled: false,
+		BaseURL: "",
 		APIKey:  "",
 		Model:   "llama-3.1-8b-instant",
 		CircuitBreaker: CircuitBreakerConfig{
