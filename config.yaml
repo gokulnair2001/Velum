@@ -19,7 +19,7 @@ server:
 cors:
   allowed_origins: ["*"]                          # OR specific domains like ["https://dashboard.mycompany.com"]
   allowed_methods: ["GET", "POST"]
-  allowed_headers: ["Content-Type", "Authorization", "X-Infra-Key", "X-Project-ID"]
+  allowed_headers: ["Content-Type", "Authorization", "X-Infra-Key", "X-Project-ID", "X-Update-Baseline"]
 
 # Storage configuration
 storage:
@@ -42,6 +42,10 @@ baseline:
   
   # Minimum days of data required before computing baseline
   min_days: 7
+  
+  # Minimum affected users to allow high/medium significance.
+  # Patterns below this threshold are still reported but capped at "low" significance.
+  min_affected_users: 5
   
   # How often to compute baseline: "daily" (cached once per day) or "always" (every request)
   computation_mode: "daily"

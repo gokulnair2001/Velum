@@ -72,9 +72,13 @@ func (rb *ReportBuilder) Build(input *ReportInput) *AnalysisReport {
 		Summary:     summary,
 		Flows:       rb.buildFlowMetrics(flows),
 		Patterns:    rb.buildPatternInsights(patterns, input.ChangeResults),
+		Clusters:    rb.buildPatternClusters(patterns),
 		DataQuality: rb.buildDataQuality(input),
 		Metadata:    rb.buildMetadata(ctx, input.PipelineLayers),
 	}
+
+	// Link patterns to their clusters
+	rb.linkPatternsToCluster(report.Patterns, report.Clusters)
 
 	// Funnel metrics (only when definitions are provided)
 	if ctx != nil && len(ctx.FunnelDefinitions) > 0 {
@@ -347,17 +351,29 @@ func (rb *ReportBuilder) buildPatternInsights(
 	insights := make([]*PatternInsight, 0, len(patterns))
 
 	for _, p := range patterns {
+		// Count unique users in the affected user set
+		uniqueAffected := len(p.AffectedUserIDs)
+		if uniqueAffected == 0 {
+			uniqueAffected = p.AffectedUsers // fallback for patterns without ID tracking
+		}
+
+		// Count unique users in the full flow group (from TotalFlows as approximation,
+		// but we can't recover unique users without the original flows here)
+		uniqueInGroup := p.TotalFlows
+
 		insight := &PatternInsight{
-			Type:          string(p.Pattern),
-			Severity:      string(p.Severity),
-			Confidence:    string(p.Confidence),
-			Flow:          p.Flow,
-			ContextKey:    p.ContextKey,
-			AffectedUsers: p.AffectedUsers,
-			TotalFlows:    p.TotalFlows,
-			ImpactRatio:   p.Evidence.Ratio,
-			Evidence:      p.Evidence.Description,
-			SampleFlowIDs: p.Evidence.SampleFlowIDs,
+			Type:                string(p.Pattern),
+			Severity:            string(p.Severity),
+			Confidence:          string(p.Confidence),
+			Flow:                p.Flow,
+			ContextKey:          p.ContextKey,
+			AffectedUsers:       p.AffectedUsers,
+			UniqueAffectedUsers: uniqueAffected,
+			TotalFlows:          p.TotalFlows,
+			UniqueUsersInGroup:  uniqueInGroup,
+			ImpactRatio:         p.Evidence.Ratio,
+			Evidence:            p.Evidence.Description,
+			SampleFlowIDs:       p.Evidence.SampleFlowIDs,
 		}
 
 		// Add funnel info for funnel_dropoff patterns
@@ -575,6 +591,165 @@ func (rb *ReportBuilder) buildMetadata(
 	}
 
 	return meta
+}
+
+// buildPatternClusters groups co-occurring patterns on the same flow into
+// root cause clusters. Patterns sharing >50% affected users (Jaccard similarity)
+// on the same flow are merged into a single cluster.
+func (rb *ReportBuilder) buildPatternClusters(patterns []*pattern.DetectedPattern) []*PatternCluster {
+	// Group patterns by flow (only global context key — skip context-keyed variants)
+	byFlow := make(map[string][]*pattern.DetectedPattern)
+	for _, p := range patterns {
+		if p.ContextKey == "" {
+			byFlow[p.Flow] = append(byFlow[p.Flow], p)
+		}
+	}
+
+	var clusters []*PatternCluster
+	severityOrder := map[pattern.Severity]int{pattern.SeverityHigh: 0, pattern.SeverityMedium: 1, pattern.SeverityLow: 2}
+
+	for flow, group := range byFlow {
+		if len(group) < 2 {
+			continue // need at least 2 patterns to form a cluster
+		}
+
+		// Check user-set overlap between all pairs
+		// Build an adjacency list of patterns with Jaccard > 0.5
+		n := len(group)
+		clustered := make([]bool, n)
+		clusterAssignment := make([]int, n) // -1 = unassigned
+		for i := range clusterAssignment {
+			clusterAssignment[i] = -1
+		}
+
+		nextClusterID := 0
+		for i := 0; i < n; i++ {
+			if len(group[i].AffectedUserIDs) == 0 {
+				continue
+			}
+			for j := i + 1; j < n; j++ {
+				if len(group[j].AffectedUserIDs) == 0 {
+					continue
+				}
+				jaccard := jaccardSimilarity(group[i].AffectedUserIDs, group[j].AffectedUserIDs)
+				if jaccard >= 0.5 {
+					// Merge into same cluster
+					if clusterAssignment[i] >= 0 {
+						clusterAssignment[j] = clusterAssignment[i]
+					} else if clusterAssignment[j] >= 0 {
+						clusterAssignment[i] = clusterAssignment[j]
+					} else {
+						clusterAssignment[i] = nextClusterID
+						clusterAssignment[j] = nextClusterID
+						nextClusterID++
+					}
+					clustered[i] = true
+					clustered[j] = true
+				}
+			}
+		}
+
+		// Build clusters from assignments
+		clusterMembers := make(map[int][]*pattern.DetectedPattern)
+		for i, cid := range clusterAssignment {
+			if cid >= 0 {
+				clusterMembers[cid] = append(clusterMembers[cid], group[i])
+			}
+		}
+
+		for cid, members := range clusterMembers {
+			if len(members) < 2 {
+				continue
+			}
+
+			// Sort by severity (highest first), then by pattern type weight
+			sort.Slice(members, func(i, j int) bool {
+				si := severityOrder[members[i].Severity]
+				sj := severityOrder[members[j].Severity]
+				if si != sj {
+					return si < sj
+				}
+				wi := pattern.PatternTypeWeight[members[i].Pattern]
+				wj := pattern.PatternTypeWeight[members[j].Pattern]
+				return wi > wj
+			})
+
+			root := members[0]
+			var effects []string
+			for _, m := range members[1:] {
+				effects = append(effects, string(m.Pattern))
+			}
+
+			// Compute union of all affected users
+			union := make(map[string]bool)
+			for _, m := range members {
+				for uid := range m.AffectedUserIDs {
+					union[uid] = true
+				}
+			}
+
+			// Compute overall overlap ratio (average pairwise Jaccard)
+			var totalJaccard float64
+			pairs := 0
+			for i := 0; i < len(members); i++ {
+				for j := i + 1; j < len(members); j++ {
+					totalJaccard += jaccardSimilarity(members[i].AffectedUserIDs, members[j].AffectedUserIDs)
+					pairs++
+				}
+			}
+			avgJaccard := 0.0
+			if pairs > 0 {
+				avgJaccard = totalJaccard / float64(pairs)
+			}
+
+			clusterID := fmt.Sprintf("%s_cluster_%d", flow, cid)
+			clusters = append(clusters, &PatternCluster{
+				ClusterID:      clusterID,
+				RootPattern:    string(root.Pattern),
+				EffectPatterns: effects,
+				Flow:           flow,
+				AffectedUsers:  len(union),
+				OverlapRatio:   avgJaccard,
+				Severity:       string(root.Severity),
+			})
+		}
+	}
+
+	return clusters
+}
+
+// linkPatternsToCluster assigns ClusterID to pattern insights that belong to a cluster.
+func (rb *ReportBuilder) linkPatternsToCluster(insights []*PatternInsight, clusters []*PatternCluster) {
+	for _, cluster := range clusters {
+		allTypes := append([]string{cluster.RootPattern}, cluster.EffectPatterns...)
+		for _, insight := range insights {
+			if insight.Flow == cluster.Flow && insight.ContextKey == "" {
+				for _, pt := range allTypes {
+					if insight.Type == pt {
+						insight.ClusterID = cluster.ClusterID
+					}
+				}
+			}
+		}
+	}
+}
+
+// jaccardSimilarity computes |A ∩ B| / |A ∪ B| for two user sets.
+func jaccardSimilarity(a, b map[string]bool) float64 {
+	if len(a) == 0 && len(b) == 0 {
+		return 0.0
+	}
+	intersection := 0
+	for k := range a {
+		if b[k] {
+			intersection++
+		}
+	}
+	union := len(a) + len(b) - intersection
+	if union == 0 {
+		return 0.0
+	}
+	return float64(intersection) / float64(union)
 }
 
 // ExtractFromPipelineOutput extracts typed data from the pipeline's final output.

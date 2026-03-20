@@ -132,6 +132,11 @@ type AnalysisContext struct {
 	// PartialSession: if true, the engine knows it's seeing an incomplete picture.
 	// Suppresses patterns that require full session visibility.
 	PartialSession bool `json:"partial_session"`
+
+	// UpdateBaseline controls whether the baseline snapshot is stored after analysis.
+	// Default is true (header absent = store). Set to false via X-Update-Baseline: false
+	// for ad-hoc analysis without polluting baseline history.
+	UpdateBaseline bool `json:"-"`
 }
 
 // DefaultAnalysisContext returns a conservative default context (raw batch, no assumptions).
@@ -140,6 +145,7 @@ func DefaultAnalysisContext() *AnalysisContext {
 		Ctx:            context.Background(),
 		Scope:          ScopeRawBatch,
 		PartialSession: true, // assume incomplete by default — safer
+		UpdateBaseline: true, // always store baseline by default
 	}
 }
 

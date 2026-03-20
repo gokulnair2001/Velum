@@ -81,6 +81,7 @@ docker compose up --build
 |--------|----------|-------------|
 | `X-Project-ID` | Always | Project identifier (1–64 chars, alphanumeric/hyphens/underscores) |
 | `X-Infra-Key` | When `security.enabled: true` | API key for authentication |
+| `X-Update-Baseline` | No | `true` (default) = store snapshot to baseline. `false` = read-only analysis, no baseline mutation. |
 
 ### Event Fields
 
@@ -164,7 +165,26 @@ JSON Response
 | **Confusion Loop** | Same event repeated ≥3 times without progress |
 | **Early Dropoff** | Users bounce immediately after starting a flow |
 | **Masked Failure** | Failures followed by eventual success (hidden friction) |
-| **Hesitation** | Long pauses before taking action |
+| **Bypass Behavior** | Users skip expected steps in a flow |
+| **Funnel Dropoff** | Significant user loss between defined funnel steps |
+
+### Severity & Significance
+
+Pattern **severity** is weighted by pattern type and flow intent:
+
+| Pattern | Weight | Notes |
+|---------|--------|-------|
+| Retry Storm | 1.0 | Most impactful |
+| Masked Failure | 0.9 | Hidden friction |
+| Funnel Dropoff | 0.8 | Revenue impact |
+| Silent Abandonment | 0.7 | Lost engagement |
+| Early Dropoff | 0.6 | May be expected |
+| Confusion Loop | 0.5 | UX friction |
+| Bypass Behavior | 0.4 | Least impactful |
+
+Transactional flows get a 1.5× multiplier; browse flows get 0.7×.
+
+Baseline **significance** is capped at `low` when affected users are below `min_affected_users` (default: 5). The pattern is still reported with `low_volume: true` so dashboards can filter or display it, but it won't trigger high-priority alerts on statistically thin data.
 
 ---
 
@@ -191,6 +211,63 @@ storage:
 security:
   enabled: false
 ```
+
+### Baseline Detection
+
+```yaml
+baseline:
+  window_days: 28               # Days of history for baseline computation
+  min_days: 7                   # Minimum days before baseline is valid
+  min_affected_users: 5         # Below this, significance is capped at "low"
+  computation_mode: "daily"     # "daily" (cached) or "always" (per-request)
+  trend_threshold: 0.10         # 10% delta to flag increasing/decreasing
+  high_significance_threshold: 0.15  # 15% delta for high significance
+  std_deviation_multiplier: 2.0      # Multiplier for std-based significance
+```
+
+`min_affected_users` prevents low-volume patterns (e.g., 1 user with 100% impact ratio) from being flagged as high significance. Set to `1` to disable the guard.
+
+#### How Baseline Works
+
+Every analysis request:
+1. **Detects patterns** in the current batch (stateless, works for any time window)
+2. **Compares** each pattern's impact ratio against the stored historical average (last `window_days`)
+3. **Stores** the current snapshot via upsert — keyed on `(date, pattern_type, flow, context_key)`
+
+| Baseline status | Condition | Behavior |
+|---|---|---|
+| `first_observation` | 0 historical snapshots | Stores snapshot, returns unknown trend |
+| `insufficient_data` | 1–6 days of history | Stores snapshot, returns unknown trend |
+| `sufficient` | ≥7 days of history | Computes avg + stddev, returns trend + significance |
+| `out_of_window` | Data older than 28 days | Skips storage and comparison entirely |
+
+**Trend** is classified by delta percentage: ≥10% increase → `increasing`, ≥10% decrease → `decreasing`, otherwise `stable`.
+
+**Significance** uses standard deviation when available (`delta ≥ 2×stddev` → `high`), falls back to absolute threshold (`delta ≥ 0.15` → `high`). Capped at `low` when affected users < `min_affected_users`.
+
+#### Data Ingestion Guidelines
+
+- **Consistent windows**: For meaningful baseline comparisons, send the same time window each ingestion (e.g., always a full day). Inconsistent window sizes produce different denominators, making ratio comparisons noisy.
+- **No overlap**: Avoid sending overlapping event batches for the same day. The last batch overwrites the snapshot (upsert), so overlapping batches cause the stored ratio to reflect only the last batch.
+- **Re-processing**: Sending the same complete batch again is safe — the upsert overwrites with identical values.
+- **Ad-hoc analysis**: For investigative queries with non-standard windows, use the `X-Update-Baseline: false` header to prevent polluting baseline history.
+
+#### Retention & Cleanup
+
+Snapshots are auto-deleted after `retention_days` (default: **90 days**). A background goroutine runs cleanup on startup and every 24 hours.
+
+```yaml
+storage:
+  retention_days: 90    # Snapshots older than this are deleted
+```
+
+| Time boundary | Default | Purpose |
+|---|---|---|
+| `baseline.window_days` | 28 days | How far back to look for comparison |
+| `baseline.min_days` | 7 days | Minimum history before comparison is valid |
+| `storage.retention_days` | 90 days | When data is permanently deleted |
+
+The 62-day gap between `window_days` and `retention_days` means historical snapshots are preserved in case you widen the baseline window later.
 
 ### Security
 
