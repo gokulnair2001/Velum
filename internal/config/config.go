@@ -121,6 +121,7 @@ type CircuitBreakerConfig struct {
 type BaselineConfig struct {
 	WindowDays                int     `yaml:"window_days"`                 // Days of history to consider
 	MinDays                   int     `yaml:"min_days"`                    // Min days before baseline is valid
+	MinAffectedUsers          int     `yaml:"min_affected_users"`          // Min users to allow high/medium significance (below = capped at low)
 	ComputationMode           string  `yaml:"computation_mode"`            // "daily" (cached) or "always" (per-request)
 	TrendThreshold            float64 `yaml:"trend_threshold"`             // Fraction change to flag a trend (0.10 = 10%)
 	HighSignificanceThreshold float64 `yaml:"high_significance_threshold"` // Fraction for high-significance (0.15 = 15%)
@@ -223,6 +224,7 @@ func DefaultConfig() *Config {
 		Baseline: BaselineConfig{
 			WindowDays:                28,
 			MinDays:                   7,
+			MinAffectedUsers:          5,
 			ComputationMode:           "daily",
 			TrendThreshold:            0.10,
 			HighSignificanceThreshold: 0.15,

@@ -265,6 +265,7 @@ func (d *Detector) detectRetryStorm(flowName, contextKey string, group []*behavi
 			contextKey,
 			group,
 			len(affectedUserIDs),
+			affectedUserIDs,
 			len(group),
 			retryCount,
 			ratio,
@@ -302,6 +303,7 @@ func (d *Detector) detectConfusionLoop(flowName, contextKey string, group []*beh
 			contextKey,
 			group,
 			len(affectedUserIDs),
+			affectedUserIDs,
 			len(group),
 			hesitateCount,
 			ratio,
@@ -378,6 +380,7 @@ func (d *Detector) detectSilentAbandonment(flowName, contextKey string, group []
 			contextKey,
 			group,
 			len(affectedUserIDs),
+			affectedUserIDs,
 			len(group),
 			silentAbandonCount,
 			ratio,
@@ -467,7 +470,7 @@ func (d *Detector) detectEarlyDropoff(flowName, contextKey string, group []*beha
 	}
 
 	// Use eligible count as denominator (excludes below-threshold and browse flows)
-	if eligibleCount == 0 {
+	if eligibleCount == 0 || eligibleCount < d.config.MinSampleSize {
 		return nil
 	}
 
@@ -480,6 +483,7 @@ func (d *Detector) detectEarlyDropoff(flowName, contextKey string, group []*beha
 			contextKey,
 			group,
 			len(affectedUserIDs),
+			affectedUserIDs,
 			eligibleCount,
 			earlyDropoffCount,
 			ratio,
@@ -516,6 +520,7 @@ func (d *Detector) detectBypassBehavior(flowName, contextKey string, group []*be
 			contextKey,
 			group,
 			len(affectedUserIDs),
+			affectedUserIDs,
 			len(group),
 			bypassCount,
 			ratio,
@@ -585,6 +590,7 @@ func (d *Detector) detectMaskedFailure(flowName, contextKey string, group []*beh
 			contextKey,
 			group,
 			len(affectedUserIDs),
+			affectedUserIDs,
 			len(group),
 			maskedFailureCount,
 			ratio,
@@ -598,6 +604,7 @@ func (d *Detector) detectMaskedFailure(flowName, contextKey string, group []*beh
 
 // buildPattern constructs a DetectedPattern with computed severity and confidence.
 // affectedUsers: count of unique users who actually exhibited the pattern.
+// affectedUserIDs: the actual set of user IDs (enables downstream clustering).
 // totalFlows: the denominator (total eligible flows considered, not necessarily the full group).
 func (d *Detector) buildPattern(
 	patternType PatternType,
@@ -605,6 +612,7 @@ func (d *Detector) buildPattern(
 	contextKey string,
 	group []*behavior.AnalyzedFlow,
 	affectedUsers int,
+	affectedUserIDs map[string]bool,
 	totalFlows int,
 	matchingFlows int,
 	ratio float64,
@@ -612,13 +620,14 @@ func (d *Detector) buildPattern(
 	sampleIDs []string,
 ) *DetectedPattern {
 	return &DetectedPattern{
-		Pattern:       patternType,
-		Flow:          flowName,
-		ContextKey:    contextKey,
-		AffectedUsers: affectedUsers,
-		TotalFlows:    totalFlows,
-		Severity:      d.computeSeverity(affectedUsers),
-		Confidence:    d.computeConfidence(group),
+		Pattern:         patternType,
+		Flow:            flowName,
+		ContextKey:      contextKey,
+		AffectedUsers:   affectedUsers,
+		AffectedUserIDs: affectedUserIDs,
+		TotalFlows:      totalFlows,
+		Severity:        d.computeSeverity(patternType, affectedUsers, group),
+		Confidence:      d.computeConfidence(group),
 		Evidence: PatternEvidence{
 			MatchingFlows: matchingFlows,
 			Ratio:         ratio,
@@ -637,12 +646,35 @@ func (d *Detector) countUniqueUsers(group []*behavior.AnalyzedFlow) int {
 	return len(users)
 }
 
-// computeSeverity determines severity based on affected user count
-func (d *Detector) computeSeverity(affectedUsers int) Severity {
-	if affectedUsers >= d.config.HighSeverityUserCount {
+// computeSeverity determines severity based on pattern type weight, flow intent,
+// and affected user count. Transactional flows with high-weight patterns are
+// escalated; browse flows are dampened.
+func (d *Detector) computeSeverity(patternType PatternType, affectedUsers int, group []*behavior.AnalyzedFlow) Severity {
+	// Base score from pattern type weight (0.0 - 1.0)
+	weight := PatternTypeWeight[patternType]
+	if weight == 0 {
+		weight = 0.5 // fallback
+	}
+
+	// Flow intent multiplier: transact flows are more critical
+	intentMultiplier := 1.0
+	for _, flow := range group {
+		if flow.FlowIntent == behavior.FlowIntentTransact {
+			intentMultiplier = 1.5
+			break
+		} else if flow.FlowIntent == behavior.FlowIntentBrowse {
+			intentMultiplier = 0.7
+			break
+		}
+	}
+
+	// Combine: user count threshold adjusted by weight and intent
+	adjustedUsers := float64(affectedUsers) * weight * intentMultiplier
+
+	if adjustedUsers >= float64(d.config.HighSeverityUserCount) || affectedUsers >= d.config.HighSeverityUserCount {
 		return SeverityHigh
 	}
-	if affectedUsers >= d.config.MediumSeverityUserCount {
+	if adjustedUsers >= float64(d.config.MediumSeverityUserCount) || affectedUsers >= d.config.MediumSeverityUserCount {
 		return SeverityMedium
 	}
 	return SeverityLow
@@ -738,10 +770,12 @@ func (d *Detector) detectFunnelDropoff(flows []*behavior.AnalyzedFlow, ctx *beha
 			if dropRate >= d.config.EarlyDropoffThreshold {
 				droppedUsers := fromCount - toCount
 
-				// Collect sample flow IDs from users who dropped at this step
+				// Collect dropped user IDs and sample flow IDs
+				droppedUserIDs := make(map[string]bool)
 				var sampleIDs []string
 				for _, flow := range flows {
 					if flow.Flow == steps[i] && !stepUsers[i+1][flow.UserID] {
+						droppedUserIDs[flow.UserID] = true
 						if len(sampleIDs) < 3 {
 							sampleIDs = append(sampleIDs, flow.FlowInstanceID)
 						}
@@ -749,13 +783,14 @@ func (d *Detector) detectFunnelDropoff(flows []*behavior.AnalyzedFlow, ctx *beha
 				}
 
 				patterns = append(patterns, &DetectedPattern{
-					Pattern:       PatternFunnelDropoff,
-					Flow:          steps[i],
-					ContextKey:    "",
-					AffectedUsers: droppedUsers,
-					TotalFlows:    fromCount,
-					Severity:      d.computeSeverity(droppedUsers),
-					Confidence:    ConfidenceMedium,
+					Pattern:         PatternFunnelDropoff,
+					Flow:            steps[i],
+					ContextKey:      "",
+					AffectedUsers:   droppedUsers,
+					AffectedUserIDs: droppedUserIDs,
+					TotalFlows:      fromCount,
+					Severity:        d.computeSeverity(PatternFunnelDropoff, droppedUsers, nil),
+					Confidence:      ConfidenceMedium,
 					Evidence: PatternEvidence{
 						MatchingFlows:  droppedUsers,
 						Ratio:          dropRate,

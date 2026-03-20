@@ -49,6 +49,7 @@ type ChangeResult struct {
 	DeltaPercentage     float64        `json:"delta_percentage"`
 	Trend               Trend          `json:"trend"`
 	ChangeSignificance  Significance   `json:"change_significance"`
+	LowVolume           bool           `json:"low_volume,omitempty"`
 	BaselineStatus      BaselineStatus `json:"baseline_status"`
 	BaselineWindow      string         `json:"baseline_window"`
 	BaselineDays        int            `json:"baseline_days"`
@@ -82,6 +83,10 @@ type Config struct {
 	// StandardDeviationMultiplier is used when std is available (default: 2.0)
 	StandardDeviationMultiplier float64
 
+	// MinAffectedUsers is the minimum user count for high/medium significance.
+	// Patterns below this are still reported but capped at SignificanceLow.
+	MinAffectedUsers int
+
 	// PatternVersion for versioning pattern detection logic
 	PatternVersion string
 }
@@ -95,6 +100,7 @@ func DefaultConfig() *Config {
 		TrendThreshold:              0.10, // 10% change threshold
 		HighSignificanceThreshold:   0.15, // 15% delta for high significance
 		StandardDeviationMultiplier: 2.0,
+		MinAffectedUsers:            5,
 		PatternVersion:              "v1",
 	}
 }

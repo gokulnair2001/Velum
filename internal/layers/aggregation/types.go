@@ -20,6 +20,11 @@ type AnalysisReport struct {
 	// Each pattern includes evidence, optional baseline comparison, and context.
 	Patterns []*PatternInsight `json:"patterns"`
 
+	// Clusters groups co-occurring patterns on the same flow into root cause clusters.
+	// Patterns sharing >50% affected users on the same flow are clustered together.
+	// Only populated when multiple patterns exist on the same flow.
+	Clusters []*PatternCluster `json:"clusters,omitempty"`
+
 	// EntityInsights provides per-entity behavioral summaries.
 	// Only populated when scope is user_session/user_history and entity data is available.
 	EntityInsights []*EntityInsight `json:"entity_insights,omitempty"`
@@ -152,11 +157,17 @@ type PatternInsight struct {
 	// Empty for global patterns.
 	ContextKey string `json:"context_key,omitempty"`
 
-	// AffectedUsers is the count of unique users affected by this pattern.
+	// AffectedUsers is the count of flow instances affected by this pattern.
 	AffectedUsers int `json:"affected_users"`
+
+	// UniqueAffectedUsers is the number of distinct users affected (deduplicated across sessions).
+	UniqueAffectedUsers int `json:"unique_affected_users"`
 
 	// TotalFlows is the denominator — total flows in this group.
 	TotalFlows int `json:"total_flows"`
+
+	// UniqueUsersInGroup is the total distinct users in the flow group.
+	UniqueUsersInGroup int `json:"unique_users_in_group"`
 
 	// ImpactRatio is the ratio of affected flows (0.0–1.0).
 	ImpactRatio float64 `json:"impact_ratio"`
@@ -166,6 +177,9 @@ type PatternInsight struct {
 
 	// SampleFlowIDs provides example flow instance IDs for debugging.
 	SampleFlowIDs []string `json:"sample_flow_ids,omitempty"`
+
+	// ClusterID links this pattern to a root cause cluster (empty if not clustered).
+	ClusterID string `json:"cluster_id,omitempty"`
 
 	// FunnelInfo is populated only for funnel_dropoff patterns.
 	FunnelInfo *FunnelPatternInfo `json:"funnel_info,omitempty"`
@@ -243,6 +257,37 @@ type AIInsight struct {
 	Details        []string `json:"details,omitempty"`
 	Hypotheses     []string `json:"hypotheses,omitempty"`
 	ConfidenceNote string   `json:"confidence_note,omitempty"`
+}
+
+// PatternCluster groups co-occurring patterns that share the same root cause.
+// When multiple patterns (e.g. retry_storm, silent_abandonment, masked_failure)
+// affect overlapping users on the same flow, they are clustered together rather
+// than reported as independent problems.
+type PatternCluster struct {
+	// ClusterID is a unique identifier for this cluster.
+	ClusterID string `json:"cluster_id"`
+
+	// RootPattern is the highest-severity pattern in the cluster, treated as
+	// the likely root cause.
+	RootPattern string `json:"root_pattern"`
+
+	// EffectPatterns are the other patterns in the cluster that are likely
+	// downstream effects of the root pattern.
+	EffectPatterns []string `json:"effect_patterns"`
+
+	// Flow is the flow this cluster applies to.
+	Flow string `json:"flow"`
+
+	// AffectedUsers is the count of unique users affected by ANY pattern
+	// in this cluster (union).
+	AffectedUsers int `json:"affected_users"`
+
+	// OverlapRatio is the Jaccard similarity between the user sets of the
+	// patterns in this cluster (intersection / union). Higher = more correlated.
+	OverlapRatio float64 `json:"overlap_ratio"`
+
+	// Severity is the highest severity among clustered patterns.
+	Severity string `json:"severity"`
 }
 
 // DataQuality reports on input data completeness and processing outcomes.

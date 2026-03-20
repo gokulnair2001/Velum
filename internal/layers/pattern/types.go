@@ -33,14 +33,15 @@ const (
 
 // DetectedPattern represents a pattern found in the behavioral data
 type DetectedPattern struct {
-	Pattern       PatternType     `json:"pattern"`
-	Flow          string          `json:"flow"`
-	ContextKey    string          `json:"context_key"`
-	AffectedUsers int             `json:"affected_users"`
-	TotalFlows    int             `json:"total_flows"`
-	Severity      Severity        `json:"severity"`
-	Confidence    Confidence      `json:"confidence"`
-	Evidence      PatternEvidence `json:"evidence"`
+	Pattern         PatternType     `json:"pattern"`
+	Flow            string          `json:"flow"`
+	ContextKey      string          `json:"context_key"`
+	AffectedUsers   int             `json:"affected_users"`
+	AffectedUserIDs map[string]bool `json:"affected_user_ids,omitempty"`
+	TotalFlows      int             `json:"total_flows"`
+	Severity        Severity        `json:"severity"`
+	Confidence      Confidence      `json:"confidence"`
+	Evidence        PatternEvidence `json:"evidence"`
 }
 
 // PatternEvidence provides supporting data for the detected pattern
@@ -88,6 +89,18 @@ type Config struct {
 
 	// MediumSeverityUserCount is the user count threshold for medium severity
 	MediumSeverityUserCount int
+}
+
+// PatternTypeWeight defines severity weights for each pattern type.
+// Higher weight = more impactful when detected.
+var PatternTypeWeight = map[PatternType]float64{
+	PatternRetryStorm:        1.0,
+	PatternMaskedFailure:     0.9,
+	PatternSilentAbandonment: 0.7,
+	PatternEarlyDropoff:      0.6,
+	PatternConfusionLoop:     0.5,
+	PatternBypassBehavior:    0.4,
+	PatternFunnelDropoff:     0.8,
 }
 
 // DefaultConfig returns the default pattern detection configuration

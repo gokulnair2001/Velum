@@ -68,7 +68,7 @@ func (d *Detector) Name() string {
 // Processes data for today's date with no project scoping (default project)
 func (d *Detector) Process(input interface{}) (interface{}, error) {
 	today := time.Now().UTC().Truncate(24 * time.Hour)
-	return d.processWithDates(context.Background(), input, today, today, "default")
+	return d.processWithDates(context.Background(), input, today, today, "default", true)
 }
 
 // ProcessWithContext implements the ContextAwareLayer interface.
@@ -76,14 +76,16 @@ func (d *Detector) Process(input interface{}) (interface{}, error) {
 func (d *Detector) ProcessWithContext(input interface{}, metadata interface{}) (interface{}, error) {
 	projectID := "default"
 	reqCtx := context.Background()
+	updateBaseline := true
 	if actx, ok := metadata.(*behavior.AnalysisContext); ok && actx != nil {
 		if actx.ProjectID != "" {
 			projectID = actx.ProjectID
 		}
 		reqCtx = actx.RequestContext()
+		updateBaseline = actx.UpdateBaseline
 	}
 	today := time.Now().UTC().Truncate(24 * time.Hour)
-	return d.processWithDates(reqCtx, input, today, today, projectID)
+	return d.processWithDates(reqCtx, input, today, today, projectID, updateBaseline)
 }
 
 // ProcessWithDataDate processes data with a specific data date
@@ -91,28 +93,28 @@ func (d *Detector) ProcessWithContext(input interface{}, metadata interface{}) (
 // This is useful for processing historical/backfill data
 func (d *Detector) ProcessWithDataDate(input interface{}, dataDate time.Time) (interface{}, error) {
 	today := time.Now().UTC().Truncate(24 * time.Hour)
-	return d.processWithDates(context.Background(), input, dataDate.UTC().Truncate(24*time.Hour), today, "default")
+	return d.processWithDates(context.Background(), input, dataDate.UTC().Truncate(24*time.Hour), today, "default", true)
 }
 
 // ProcessWithDate processes input with a specific date (for testing)
 // Both data date and "today" are set to the provided date
 func (det *Detector) ProcessWithDate(input interface{}, date time.Time) (interface{}, error) {
 	d := date.UTC().Truncate(24 * time.Hour)
-	return det.processWithDates(context.Background(), input, d, d, "default")
+	return det.processWithDates(context.Background(), input, d, d, "default", true)
 }
 
 // processWithDates is the internal method that handles processing with explicit dates
-func (d *Detector) processWithDates(ctx context.Context, input interface{}, dataDate time.Time, today time.Time, projectID string) (interface{}, error) {
+func (d *Detector) processWithDates(ctx context.Context, input interface{}, dataDate time.Time, today time.Time, projectID string, updateBaseline bool) (interface{}, error) {
 	switch v := input.(type) {
 	case *pattern.PatternResult:
-		return d.analyzePatternChanges(ctx, v, dataDate, today, projectID)
+		return d.analyzePatternChanges(ctx, v, dataDate, today, projectID, updateBaseline)
 	default:
 		return input, nil
 	}
 }
 
 // analyzePatternChanges processes pattern results and detects changes
-func (d *Detector) analyzePatternChanges(ctx context.Context, patternResult *pattern.PatternResult, dataDate time.Time, today time.Time, projectID string) (*BaselineResult, error) {
+func (d *Detector) analyzePatternChanges(ctx context.Context, patternResult *pattern.PatternResult, dataDate time.Time, today time.Time, projectID string, updateBaseline bool) (*BaselineResult, error) {
 	var changeResults []*ChangeResult
 
 	for _, detectedPattern := range patternResult.DetectedPatterns {
@@ -130,10 +132,12 @@ func (d *Detector) analyzePatternChanges(ctx context.Context, patternResult *pat
 			changeResult = d.markOutOfWindow(currentSnapshot)
 
 		case windowStatusWithinWindow, windowStatusToday:
-			// Data is within baseline window (including today) - compare and store
+			// Data is within baseline window (including today) - compare and optionally store
 			changeResult = d.analyzePatternChange(ctx, currentSnapshot, projectID)
-			if err := d.storage.StoreSnapshot(ctx, currentSnapshot); err != nil {
-				slog.Warn("failed to store snapshot", "error", err)
+			if updateBaseline {
+				if err := d.storage.StoreSnapshot(ctx, currentSnapshot); err != nil {
+					slog.Warn("failed to store snapshot", "error", err)
+				}
 			}
 		}
 
@@ -371,6 +375,14 @@ func (d *Detector) compareWithBaseline(current *storage.PatternSnapshot, baselin
 	trend := d.classifyTrend(deltaPct)
 	significance := d.classifySignificance(delta, baseline)
 
+	// Cap significance at low when affected user count is below threshold.
+	// The pattern is still reported (the signal is real) but shouldn't
+	// trigger high-priority alerts on statistically thin data.
+	lowVolume := d.config.MinAffectedUsers > 0 && current.AffectedUsers < d.config.MinAffectedUsers
+	if lowVolume && significance != SignificanceLow {
+		significance = SignificanceLow
+	}
+
 	return &ChangeResult{
 		PatternType:         current.PatternType,
 		Flow:                current.Flow,
@@ -381,6 +393,7 @@ func (d *Detector) compareWithBaseline(current *storage.PatternSnapshot, baselin
 		DeltaPercentage:     deltaPct,
 		Trend:               trend,
 		ChangeSignificance:  significance,
+		LowVolume:           lowVolume,
 		BaselineStatus:      BaselineStatusSufficient,
 		BaselineWindow:      fmt.Sprintf("last_%d_days", d.config.BaselineWindowDays),
 		BaselineDays:        baseline.Count,

@@ -172,17 +172,17 @@ func TestSeverityComputation(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		highGroup[i] = &behavior.AnalyzedFlow{UserID: string(rune(i))}
 	}
-	if d.computeSeverity(d.countUniqueUsers(highGroup)) != SeverityHigh {
+	if d.computeSeverity(PatternRetryStorm, d.countUniqueUsers(highGroup), highGroup) != SeverityHigh {
 		t.Error("Expected high severity for 100+ users")
 	}
 
 	// Test medium severity
-	if d.computeSeverity(50) != SeverityMedium {
+	if d.computeSeverity(PatternRetryStorm, 50, nil) != SeverityMedium {
 		t.Error("Expected medium severity for 50 users")
 	}
 
 	// Test low severity
-	if d.computeSeverity(10) != SeverityLow {
+	if d.computeSeverity(PatternRetryStorm, 10, nil) != SeverityLow {
 		t.Error("Expected low severity for 10 users")
 	}
 }

@@ -116,7 +116,7 @@ func NewHandler(cfg *config.Config) *Handler {
 			BaseURL:  cfg.ContextAgent.BaseURL,
 			APIKey:   cfg.ContextAgent.APIKey,
 			Model:    cfg.ContextAgent.Model,
-			Debug:   cfg.Server.Environment == "development",
+			Debug:    cfg.Server.Environment == "development",
 			CircuitBreaker: propertyagent.CircuitBreakerConfig{
 				Enabled:          cfg.Resiliency.CircuitBreaker.Enabled,
 				FailureThreshold: cfg.Resiliency.CircuitBreaker.FailureThreshold,
@@ -146,7 +146,7 @@ func NewHandler(cfg *config.Config) *Handler {
 			BaseURL:  cfg.VocabAgent.BaseURL,
 			APIKey:   cfg.VocabAgent.APIKey,
 			Model:    cfg.VocabAgent.Model,
-			Debug:   cfg.Server.Environment == "development",
+			Debug:    cfg.Server.Environment == "development",
 			CircuitBreaker: vocabagent.CircuitBreakerConfig{
 				Enabled:          cfg.Resiliency.CircuitBreaker.Enabled,
 				FailureThreshold: cfg.Resiliency.CircuitBreaker.FailureThreshold,
@@ -186,6 +186,7 @@ func NewHandler(cfg *config.Config) *Handler {
 	baselineConfig := &baseline.Config{
 		BaselineWindowDays:          cfg.Baseline.WindowDays,
 		MinBaselineDays:             cfg.Baseline.MinDays,
+		MinAffectedUsers:            cfg.Baseline.MinAffectedUsers,
 		ComputationMode:             cfg.Baseline.ComputationMode,
 		TrendThreshold:              cfg.Baseline.TrendThreshold,
 		HighSignificanceThreshold:   cfg.Baseline.HighSignificanceThreshold,
@@ -214,7 +215,7 @@ func NewHandler(cfg *config.Config) *Handler {
 			BaseURL:  cfg.AIAnalyzer.BaseURL,
 			APIKey:   cfg.AIAnalyzer.APIKey,
 			Model:    cfg.AIAnalyzer.Model,
-			Debug:   cfg.Server.Environment == "development",
+			Debug:    cfg.Server.Environment == "development",
 			CircuitBreaker: ai.CircuitBreakerConfig{
 				Enabled:          cfg.Resiliency.CircuitBreaker.Enabled,
 				FailureThreshold: cfg.Resiliency.CircuitBreaker.FailureThreshold,
@@ -354,6 +355,10 @@ const maxEventsPerRequest = 10000
 // ProjectIDHeader is the HTTP header that identifies the project.
 const ProjectIDHeader = "X-Project-ID"
 
+// UpdateBaselineHeader controls whether the baseline snapshot is stored.
+// Absent or "true" = store (default). "false" = read-only analysis.
+const UpdateBaselineHeader = "X-Update-Baseline"
+
 // validProjectID matches alphanumeric, hyphens, underscores (1-64 chars)
 var validProjectID = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
 
@@ -449,6 +454,8 @@ func (h *Handler) Analyze(w http.ResponseWriter, r *http.Request) {
 	}
 	// Always set ProjectID from the HTTP header (overrides any body value)
 	analysisCtx.ProjectID = projectID
+	// Set baseline update flag from header (default: true)
+	analysisCtx.UpdateBaseline = r.Header.Get(UpdateBaselineHeader) != "false"
 	// Carry the HTTP request context through the pipeline so layers can
 	// cancel LLM / DB calls when the client disconnects.
 	analysisCtx.Ctx = r.Context()
