@@ -19,7 +19,7 @@ server:
 cors:
   allowed_origins: ["*"]                          # OR specific domains like ["https://dashboard.mycompany.com"]
   allowed_methods: ["GET", "POST"]
-  allowed_headers: ["Content-Type", "Authorization", "X-Infra-Key", "X-Project-ID", "X-Update-Baseline"]
+  allowed_headers: ["Content-Type", "Authorization", "X-Infra-Key", "X-Project-ID"]
 
 # Storage configuration
 storage:

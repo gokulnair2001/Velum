@@ -78,6 +78,7 @@ func (s *Server) Router() *chi.Mux {
 		// API routes
 		r.Route("/api/v1", func(r chi.Router) {
 			r.Post("/analyze", s.handler.Analyze)
+			r.Post("/baseline", s.handler.Baseline)
 		})
 	})
 
