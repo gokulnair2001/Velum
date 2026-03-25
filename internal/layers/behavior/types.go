@@ -134,8 +134,7 @@ type AnalysisContext struct {
 	PartialSession bool `json:"partial_session"`
 
 	// UpdateBaseline controls whether the baseline snapshot is stored after analysis.
-	// Default is true (header absent = store). Set to false via X-Update-Baseline: false
-	// for ad-hoc analysis without polluting baseline history.
+	// Set to true by the baseline endpoint, false by the analyze endpoint.
 	UpdateBaseline bool `json:"-"`
 }
 

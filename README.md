@@ -1,8 +1,39 @@
 # Velum
 
-Zero-config behavioral pattern detection engine for product analytics. Send raw JSON events from any domain — e-commerce, ride-hailing, streaming, fintech — and get back detected anti-patterns (retry storms, silent abandonment, confusion loops, early dropoff, hesitation) with optional AI-powered natural language summaries.
+Your analytics tools tell you **what** happened. Velum tells you **why**.
 
-Works with a single `POST` endpoint.
+Amplitude, PostHog, Mixpanel, Segment — they're exceptional at collecting events and rendering charts. But they stop at the data layer. When 40% of your users drop off at checkout, they'll show you the number. They won't tell you it's a retry storm, or a confusion loop, or silent abandonment — and they won't tell you it got 18% worse this week compared to your 28-day baseline.
+
+Velum is the behavioral intelligence layer that sits **on top of your existing analytics stack**. Feed it the same events your tools already collect. Get back named, quantified behavioral anti-patterns — grounded in the actual sequence of actions your users took.
+
+```
+Your App → Amplitude / PostHog / Segment / Mixpanel
+                        │
+                        └──→ Velum
+                                │
+                                └──→ "Retry storm at checkout, affecting 38% of users.
+                                      Up 21% vs. last 28 days. High significance."
+```
+
+**This repository is the open-source core engine** — self-hostable, auditable, MIT licensed. A cloud version with an analysis dashboard, scheduled baseline jobs, and native source connectors for major analytics platforms is in development.
+
+---
+
+## What Velum Detects
+
+The behavioral patterns that get buried in raw event tables:
+
+| Pattern | What it means |
+|---------|--------------|
+| **Retry Storm** | A large share of users are repeatedly hammering the same action — usually because it's failing silently |
+| **Confusion Loop** | Users are cycling through the same events without progressing — a sign of broken UX or unclear state |
+| **Silent Abandonment** | Users land, look around, and leave without a single meaningful interaction |
+| **Early Dropoff** | Users are bouncing immediately after entering a flow — before they even engage with it |
+| **Masked Failure** | Users eventually succeed, but only after hitting failures — hidden friction that looks fine in conversion metrics |
+| **Bypass Behavior** | Users are skipping expected steps — either finding shortcuts or working around broken flows |
+| **Funnel Dropoff** | Statistically significant user loss between specific funnel steps you define |
+
+Each pattern comes with severity, confidence, affected user count, and a baseline comparison showing whether it's getting better or worse over time.
 
 ---
 
@@ -25,6 +56,39 @@ go run cmd/velum/main.go
 ```
 
 ### Try It
+
+Velum exposes two core endpoints — one for **building baselines** from historical data, and one for **analyzing** new events against those baselines.
+
+#### 1. Build a baseline
+
+Feed historical events to create a baseline snapshot. Do this first (or on a schedule) so Velum has some data to compare against.
+> **Note:** The baseline step is optional. Without it, `/api/v1/analyze` still detects all patterns in your batch — you just won't get trend comparisons ("increasing", "decreasing") since there's no historical data to compare against.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/baseline \
+  -H "Content-Type: application/json" \
+  -H "X-Project-ID: my-app" \
+  -d @test_cases/a1_retry_storm.json
+```
+
+Response:
+
+```json
+{
+  "success": true,
+  "message": "Baseline snapshot stored",
+  "request_id": "...",
+  "data": {
+    "patterns_stored": 1,
+    "snapshot_date": "2026-03-25",
+    "patterns": [...]
+  }
+}
+```
+
+#### 2. Analyze events
+
+Send a batch of events to detect behavioral anti-patterns. The analysis compares against stored baselines (read-only — no baseline writes happen here).
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/analyze \
@@ -73,7 +137,15 @@ docker compose up --build
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `GET` | `/health` | No | Health check (DB connectivity) |
-| `POST` | `/api/v1/analyze` | `X-Infra-Key` (if security enabled) | Analyze events |
+| `POST` | `/api/v1/analyze` | `X-Infra-Key` (if security enabled) | Analyze events against stored baselines (read-only, no baseline writes) |
+| `POST` | `/api/v1/baseline` | `X-Infra-Key` (if security enabled) | Ingest events and store baseline snapshots (no AI summary) |
+
+**How the two endpoints work together:**
+
+- **`/api/v1/baseline`** — Feed historical event batches (e.g., yesterday's data, last week's data) to build up a baseline. Each call runs pattern detection and stores a snapshot keyed by date + pattern + flow. Call this on a schedule (daily, hourly) or as a one-time backfill.
+- **`/api/v1/analyze`** — Send a batch of events for real-time analysis. Velum detects patterns, compares them against stored baselines, and returns trends ("retry storms increased 21% vs. 28-day average"). This endpoint **never** writes to baseline storage — it's purely read + analyze.
+
+Both endpoints accept the same request format (`events` array + optional `analysis_context`). Both require the `X-Project-ID` header.
 
 ### Headers
 
@@ -81,7 +153,6 @@ docker compose up --build
 |--------|----------|-------------|
 | `X-Project-ID` | Always | Project identifier (1–64 chars, alphanumeric/hyphens/underscores) |
 | `X-Infra-Key` | When `security.enabled: true` | API key for authentication |
-| `X-Update-Baseline` | No | `true` (default) = store snapshot to baseline. `false` = read-only analysis, no baseline mutation. |
 
 ### Event Fields
 
@@ -155,18 +226,6 @@ JSON Response
 | 5 | **Pattern Detector** | Aggregates behaviors across users into named anti-patterns. Patterns keyed by flow + context. | No |
 | 6 | **Baseline Comparator** | Compares current patterns against historical snapshots. Detects trends and significance. | No |
 | 7 | **AI Analyzer** | Generates natural language summary with hypotheses grounded in data. | Yes |
-
-### Detected Patterns
-
-| Pattern | Trigger |
-|---------|---------|
-| **Retry Storm** | ≥30% of users retry the same action repeatedly |
-| **Silent Abandonment** | Users view content but never interact |
-| **Confusion Loop** | Same event repeated ≥3 times without progress |
-| **Early Dropoff** | Users bounce immediately after starting a flow |
-| **Masked Failure** | Failures followed by eventual success (hidden friction) |
-| **Bypass Behavior** | Users skip expected steps in a flow |
-| **Funnel Dropoff** | Significant user loss between defined funnel steps |
 
 ### Severity & Significance
 
@@ -250,7 +309,7 @@ Every analysis request:
 - **Consistent windows**: For meaningful baseline comparisons, send the same time window each ingestion (e.g., always a full day). Inconsistent window sizes produce different denominators, making ratio comparisons noisy.
 - **No overlap**: Avoid sending overlapping event batches for the same day. The last batch overwrites the snapshot (upsert), so overlapping batches cause the stored ratio to reflect only the last batch.
 - **Re-processing**: Sending the same complete batch again is safe — the upsert overwrites with identical values.
-- **Ad-hoc analysis**: For investigative queries with non-standard windows, use the `X-Update-Baseline: false` header to prevent polluting baseline history.
+- **Ad-hoc analysis**: The `/api/v1/analyze` endpoint never writes to baseline history, so investigative queries with non-standard windows are always safe.
 
 #### Retention & Cleanup
 
