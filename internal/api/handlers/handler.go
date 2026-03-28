@@ -483,8 +483,8 @@ func respondJSON(w http.ResponseWriter, status int, payload interface{}) {
 
 // BaselineData is the response payload for the baseline ingestion endpoint.
 type BaselineData struct {
-	PatternsStored int                        `json:"patterns_stored"`
-	SnapshotDate   string                     `json:"snapshot_date"`
+	PatternsStored int                           `json:"patterns_stored"`
+	SnapshotDate   string                        `json:"snapshot_date"`
 	Patterns       []*aggregation.PatternInsight `json:"patterns,omitempty"`
 }
 

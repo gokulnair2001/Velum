@@ -1,27 +1,31 @@
-# Velum
+# Velum — Product Healing Agent
 
-Your analytics tools tell you **what** happened. Velum tells you **why**.
+Detects hidden UX friction and product gaps from real user behavior, then tells your team what to fix first.
 
-Amplitude, PostHog, Mixpanel, Segment — they're exceptional at collecting events and rendering charts. But they stop at the data layer. When 40% of your users drop off at checkout, they'll show you the number. They won't tell you it's a retry storm, or a confusion loop, or silent abandonment — and they won't tell you it got 18% worse this week compared to your 28-day baseline.
+Amplitude, PostHog, Mixpanel, Segment — they're exceptional at collecting events and rendering charts. But they stop at the data layer. When 40% of your users drop off at checkout, they'll show you the number. They won't tell you it's a retry storm, or a confusion loop, or silent abandonment — they won't tell you it got 18% worse this week — and they certainly won't tell you what to fix first.
 
-Velum is the behavioral intelligence layer that sits **on top of your existing analytics stack**. Feed it the same events your tools already collect. Get back named, quantified behavioral anti-patterns — grounded in the actual sequence of actions your users took.
+Velum is the **Product Healing Agent** that sits **on top of your existing analytics stack**. Feed it the same events your tools already collect. Get back named, quantified friction patterns — with severity, trend impact, and prioritized recommendations for what to heal first.
 
 ```
 Your App → Amplitude / PostHog / Segment / Mixpanel
                         │
-                        └──→ Velum
+                        └──→ Velum (Product Healing Agent)
                                 │
-                                └──→ "Retry storm at checkout, affecting 38% of users.
-                                      Up 21% vs. last 28 days. High significance."
+                                ├──→ "Retry storm at checkout, affecting 38% of users.
+                                │     Up 21% vs. last 28 days. High significance."
+                                │
+                                └──→ "[HIGH] Add inline error messaging on payment
+                                      failure explaining why the card was declined
+                                      and suggest alternative payment methods."
 ```
 
 **This repository is the open-source core engine** — self-hostable, auditable, MIT licensed. A cloud version with an analysis dashboard, scheduled baseline jobs, and native source connectors for major analytics platforms is in development.
 
 ---
 
-## What Velum Detects
+## What Velum Heals
 
-The behavioral patterns that get buried in raw event tables:
+The friction patterns that get buried in raw event tables — detected, diagnosed, and prioritized:
 
 | Pattern | What it means |
 |---------|--------------|
@@ -33,7 +37,7 @@ The behavioral patterns that get buried in raw event tables:
 | **Bypass Behavior** | Users are skipping expected steps — either finding shortcuts or working around broken flows |
 | **Funnel Dropoff** | Statistically significant user loss between specific funnel steps you define |
 
-Each pattern comes with severity, confidence, affected user count, and a baseline comparison showing whether it's getting better or worse over time.
+Each pattern comes with severity, confidence, affected user count, baseline comparison showing whether it's getting better or worse, and — when AI is enabled — prioritized recommendations for what to fix first.
 
 ---
 
@@ -88,7 +92,7 @@ Response:
 
 #### 2. Analyze events
 
-Send a batch of events to detect behavioral anti-patterns. The analysis compares against stored baselines (read-only — no baseline writes happen here).
+Send a batch of events to detect friction patterns and get healing recommendations. The analysis compares against stored baselines (read-only — no baseline writes happen here).
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/analyze \
@@ -183,6 +187,11 @@ With AI enabled:
       "summary": "...",
       "details": ["..."],
       "hypotheses": ["..."],
+      "recommendations": [
+        "[HIGH] Specific, actionable product/UX fix for the highest-severity pattern.",
+        "[MEDIUM] Fix for the next pattern, citing data points.",
+        "[MONITOR] What to track and when to revisit."
+      ],
       "confidence_note": "..."
     }
   }
@@ -209,7 +218,7 @@ Raw Events
 │  4. Behavior Analyzer   ─ tag behavioral signals         │
 │  5. Pattern Detector    ─ aggregate into patterns        │
 │  6. Baseline Comparator ─ compare against history        │
-│  7. AI Analyzer         ─ generate NL summaries          │
+│  7. AI Analyzer         ─ diagnose & recommend fixes     │
 └──────────────────────────────────────────────────────────┘
   │
   ▼
@@ -225,7 +234,7 @@ JSON Response
 | 4 | **Behavior Analyzer** | Tags flows with behavioral signals: retry, abandon, hesitation, exploration, success, failure. | No |
 | 5 | **Pattern Detector** | Aggregates behaviors across users into named anti-patterns. Patterns keyed by flow + context. | No |
 | 6 | **Baseline Comparator** | Compares current patterns against historical snapshots. Detects trends and significance. | No |
-| 7 | **AI Analyzer** | Generates natural language summary with hypotheses grounded in data. | Yes |
+| 7 | **AI Analyzer** | Diagnoses friction, generates summary, and recommends prioritized product/UX fixes. | Yes |
 
 ### Severity & Significance
 
