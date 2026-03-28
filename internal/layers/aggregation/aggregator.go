@@ -93,11 +93,12 @@ func (rb *ReportBuilder) Build(input *ReportInput) *AnalysisReport {
 	// AI analysis
 	if input.AIEnabled && input.AIAnalysis != nil {
 		report.AIAnalysis = &AIInsight{
-			Enabled:        true,
-			Summary:        input.AIAnalysis.Summary,
-			Details:        input.AIAnalysis.Details,
-			Hypotheses:     input.AIAnalysis.Hypotheses,
-			ConfidenceNote: input.AIAnalysis.ConfidenceNote,
+			Enabled:         true,
+			Summary:         input.AIAnalysis.Summary,
+			Details:         input.AIAnalysis.Details,
+			Hypotheses:      input.AIAnalysis.Hypotheses,
+			Recommendations: input.AIAnalysis.Recommendations,
+			ConfidenceNote:  input.AIAnalysis.ConfidenceNote,
 		}
 	}
 

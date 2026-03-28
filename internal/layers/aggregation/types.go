@@ -252,11 +252,12 @@ type EntityInsight struct {
 
 // AIInsight wraps the AI analysis output.
 type AIInsight struct {
-	Enabled        bool     `json:"enabled"`
-	Summary        string   `json:"summary,omitempty"`
-	Details        []string `json:"details,omitempty"`
-	Hypotheses     []string `json:"hypotheses,omitempty"`
-	ConfidenceNote string   `json:"confidence_note,omitempty"`
+	Enabled         bool     `json:"enabled"`
+	Summary         string   `json:"summary,omitempty"`
+	Details         []string `json:"details,omitempty"`
+	Hypotheses      []string `json:"hypotheses,omitempty"`
+	Recommendations []string `json:"recommendations,omitempty"`
+	ConfidenceNote  string   `json:"confidence_note,omitempty"`
 }
 
 // PatternCluster groups co-occurring patterns that share the same root cause.

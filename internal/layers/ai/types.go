@@ -47,10 +47,11 @@ func DefaultConfig() *Config {
 
 // AnalysisResponse represents the structured AI analysis output
 type AnalysisResponse struct {
-	Summary        string   `json:"summary"`
-	Details        []string `json:"details"`
-	Hypotheses     []string `json:"hypotheses"`
-	ConfidenceNote string   `json:"confidence_note"`
+	Summary         string   `json:"summary"`
+	Details         []string `json:"details"`
+	Hypotheses      []string `json:"hypotheses"`
+	Recommendations []string `json:"recommendations"`
+	ConfidenceNote  string   `json:"confidence_note"`
 }
 
 // AIResult contains the output of the AI layer
