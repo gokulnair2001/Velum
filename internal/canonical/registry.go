@@ -1,6 +1,11 @@
 package canonical
 
-import "fmt"
+import (
+	_ "embed"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+)
 
 // CoreFields are the fields already handled by the pipeline.
 // These are never classified as context properties.
@@ -21,90 +26,20 @@ var CoreFields = map[string]bool{
 	ContextKey:   true,
 }
 
+//go:embed dimensions.json
+var dimensionsJSON []byte
+
 // BuiltinDimensions maps known analytics dimension field names to their
-// normalized label. Multiple field names can map to the same normalized
-// label (e.g., "device", "device_type", "deviceType" all map to "device").
-// These are resolved without AI.
-var BuiltinDimensions = map[string]string{
-	// Device
-	"device":       "device",
-	"device_type":  "device",
-	"deviceType":   "device",
-	"device_model": "device_model",
-	"deviceModel":  "device_model",
+// normalized label. Loaded from the embedded dimensions.json at startup.
+var BuiltinDimensions = func() map[string]string {
+	var m map[string]string
+	if err := json.Unmarshal(dimensionsJSON, &m); err != nil {
+		slog.Error("failed to load built-in dimensions", "error", err)
+		return make(map[string]string)
+	}
+	return m
+}()
 
-	// Platform / OS
-	"platform":   "platform",
-	"os":         "platform",
-	"os_name":    "platform",
-	"osName":     "platform",
-	"os_version": "os_version",
-	"osVersion":  "os_version",
-
-	// Browser
-	"browser":         "browser",
-	"browser_name":    "browser",
-	"browserName":     "browser",
-	"browser_version": "browser_version",
-	"browserVersion":  "browser_version",
-
-	// Geography
-	"country":  "country",
-	"region":   "region",
-	"city":     "city",
-	"locale":   "locale",
-	"timezone": "timezone",
-	"tz":       "timezone",
-
-	// App versioning
-	"app_version":   "app_version",
-	"appVersion":    "app_version",
-	"build":         "build",
-	"build_version": "build",
-	"buildVersion":  "build",
-	"version":       "app_version",
-
-	// Attribution / Channel
-	"channel":      "channel",
-	"source":       "source",
-	"medium":       "medium",
-	"utm_source":   "utm_source",
-	"utmSource":    "utm_source",
-	"utm_medium":   "utm_medium",
-	"utmMedium":    "utm_medium",
-	"utm_campaign": "utm_campaign",
-	"utmCampaign":  "utm_campaign",
-	"utm_term":     "utm_term",
-	"utm_content":  "utm_content",
-	"referrer":     "referrer",
-	"ref":          "referrer",
-
-	// Environment
-	"environment": "environment",
-	"env":         "environment",
-
-	// Network
-	"network_type":    "network_type",
-	"networkType":     "network_type",
-	"connection_type": "network_type",
-	"connectionType":  "network_type",
-
-	// Screen
-	"screen_resolution": "screen_resolution",
-	"viewport":          "viewport",
-
-	// Language
-	"language": "language",
-	"lang":     "language",
-
-	// User segmentation
-	"user_type":    "user_type",
-	"userType":     "user_type",
-	"user_role":    "user_role",
-	"userRole":     "user_role",
-	"user_segment": "user_segment",
-	"userSegment":  "user_segment",
-}
 
 // IsCoreField returns true if the field is a core pipeline field
 // and should not be classified as a context property.
