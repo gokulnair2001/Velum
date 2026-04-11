@@ -28,6 +28,15 @@ func NewServer(cfg *config.Config) *Server {
 	}
 }
 
+// NewDemoServer creates a server backed entirely by in-memory storage.
+// No database, no LLM, no config file required.
+func NewDemoServer(cfg *config.Config) *Server {
+	return &Server{
+		cfg:     cfg,
+		handler: handlers.NewDemoHandler(),
+	}
+}
+
 // Shutdown releases all resources held by the server (DB connections, background
 // goroutines). It should be called after the HTTP server has stopped accepting
 // new requests.
