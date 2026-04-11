@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -33,8 +34,8 @@ type Handler struct {
 	baselinePipeline *layers.Pipeline // Layers 0–6 only, no AI (for /baseline)
 	reportBuilder    *aggregation.ReportBuilder
 	storage          storage.Storage
-	vocabStorage     *vocabagent.PostgresVocabStorage
-	propertyStorage  *propertyagent.PostgresPropertyStorage
+	vocabStorage     io.Closer
+	propertyStorage  io.Closer
 	environment      string
 	cleanupCancel    context.CancelFunc // cancels the background cleanup goroutine
 }
@@ -241,15 +242,83 @@ func NewHandler(cfg *config.Config) *Handler {
 		slog.Info("AI analyzer layer disabled", "enabled", cfg.AIAnalyzer.Enabled, "api_key_set", cfg.AIAnalyzer.APIKey != "")
 	}
 
+	// Only assign to io.Closer fields when the concrete pointer is non-nil,
+	// to avoid a non-nil interface wrapping a nil pointer.
+	var vocabCloser io.Closer
+	if vocabStorage != nil {
+		vocabCloser = vocabStorage
+	}
+	var propCloser io.Closer
+	if propertyStorage != nil {
+		propCloser = propertyStorage
+	}
+
 	return &Handler{
 		pipeline:         pipeline,
 		baselinePipeline: baselinePipeline,
 		reportBuilder:    aggregation.NewReportBuilder(),
 		storage:          storageInstance,
-		vocabStorage:     vocabStorage,
-		propertyStorage:  propertyStorage,
+		vocabStorage:     vocabCloser,
+		propertyStorage:  propCloser,
 		environment:      cfg.Server.Environment,
 		cleanupCancel:    cleanupCancel,
+	}
+}
+
+// NewDemoHandler creates a handler wired entirely with in-memory storage.
+// No database, no LLM, no config file required. Layers 2–6 only.
+func NewDemoHandler() *Handler {
+	ctx := context.Background()
+
+	// In-memory storage for baseline snapshots
+	storageInstance := storage.NewInMemoryStorage()
+
+	// In-memory vocab storage — seed built-in vocabulary
+	vocabMem := vocabagent.NewInMemoryVocabStorage()
+	if err := vocabagent.SeedBuiltinVocabulary(ctx, vocabMem); err != nil {
+		slog.Warn("demo: failed to seed vocabulary", "error", err)
+	}
+
+	// In-memory property storage — seed built-in dimensions
+	propMem := propertyagent.NewInMemoryPropertyStorage()
+	if err := propertyagent.SeedBuiltinDimensions(ctx, propMem); err != nil {
+		slog.Warn("demo: failed to seed property registry", "error", err)
+	}
+
+	pipeline := layers.NewPipeline()
+	baselinePipeline := layers.NewPipeline()
+
+	registerShared := func(layer layers.Layer) {
+		pipeline.Register(layer)
+		baselinePipeline.Register(layer)
+	}
+
+	// Layer 2: Event Adapter (no LLM agents in demo)
+	registerShared(eventadapter.NewWithLookups(vocabMem, propMem))
+
+	// Layer 3: Session & Flow Reconstructor
+	registerShared(sessionflow.New())
+
+	// Layer 4: Behavior Analyzer
+	registerShared(behavior.New())
+
+	// Layer 5: Pattern Detector — lower severity thresholds for small demo traffic
+	demoCfg := pattern.DefaultConfig()
+	demoCfg.HighSeverityUserCount = 5
+	demoCfg.MediumSeverityUserCount = 3
+	registerShared(pattern.NewWithConfig(demoCfg))
+
+	// Layer 6: Baseline Comparator (shared in-memory store)
+	registerShared(baseline.NewWithStorage(storageInstance))
+
+	return &Handler{
+		pipeline:         pipeline,
+		baselinePipeline: baselinePipeline,
+		reportBuilder:    aggregation.NewReportBuilder(),
+		storage:          storageInstance,
+		vocabStorage:     vocabMem,
+		propertyStorage:  propMem,
+		environment:      "demo",
 	}
 }
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -14,6 +15,14 @@ import (
 )
 
 func main() {
+	// Demo mode: real HTTP server, all in-memory. No DB, no API key, no config.
+	for _, arg := range os.Args[1:] {
+		if arg == "--demo" {
+			runDemoServer()
+			return
+		}
+	}
+
 	// Load configuration
 	cfg := config.Load()
 
@@ -105,4 +114,61 @@ func main() {
 	} else {
 		slog.Info("resources released")
 	}
+}
+
+// runDemoServer starts the real Velum HTTP server backed entirely by in-memory
+// storage. No database, no API key, no config file required.
+func runDemoServer() {
+	const port = "8080"
+	const addr = ":" + port
+
+	cfg := config.DefaultConfig()
+	cfg.Server.Port = port
+	cfg.Security.Enabled = false
+
+	apiServer := api.NewDemoServer(cfg)
+
+	srv := &http.Server{
+		Addr:         addr,
+		Handler:      apiServer.Router(),
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	fmt.Println()
+	fmt.Println("  Velum demo server running — no database, no API key needed.")
+	fmt.Println()
+	fmt.Println("  Build a baseline (store historical patterns):")
+	fmt.Println(`    curl -X POST http://localhost:8080/api/v1/baseline \`)
+	fmt.Println(`      -H "Content-Type: application/json" \`)
+	fmt.Println(`      -H "X-Project-ID: my-app" \`)
+	fmt.Println(`      -d @test_cases/a1_retry_storm.json`)
+	fmt.Println()
+	fmt.Println("  Analyze events (detect patterns, compare against baseline):")
+	fmt.Println(`    curl -X POST http://localhost:8080/api/v1/analyze \`)
+	fmt.Println(`      -H "Content-Type: application/json" \`)
+	fmt.Println(`      -H "X-Project-ID: my-app" \`)
+	fmt.Println(`      -d @test_cases/a1_retry_storm.json`)
+	fmt.Println()
+	fmt.Println("  Press Ctrl+C to stop.")
+	fmt.Println()
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			fmt.Fprintf(os.Stderr, "demo server error: %v\n", err)
+			os.Exit(1)
+		}
+	}()
+
+	<-stop
+	fmt.Println("\n  Shutting down demo server.")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = srv.Shutdown(ctx)
+	_ = apiServer.Shutdown()
 }
