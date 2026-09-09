@@ -2,6 +2,9 @@
 
 Detects hidden UX friction from real user behavior and tells your team what to fix first.
 
+<img width="1161" height="672" alt="Screenshot 2026-09-09 at 4 54 27 PM" src="https://github.com/user-attachments/assets/2ed820ca-208e-43bc-bf28-9708beb51011" />
+
+
 ---
 
 ## Try it now
